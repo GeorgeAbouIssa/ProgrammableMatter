@@ -9,7 +9,7 @@ goal_positions = [(8, 7), (8, 8)]
 agent = AI_Agent(grid_size, start_positions, goal_positions, topology="moore")
 
 path = agent.search()
-vis = Visualizer(grid_size, path)
+vis = Visualizer(grid_size, path, start_positions)
 vis.draw_grid()
 plt.show()
 
