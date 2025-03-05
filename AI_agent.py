@@ -1,62 +1,5 @@
-# import heapq
-
-# class AI_Agent:
-#     def __init__(self, grid_size, start, goal, topology="moore"):
-#         self.grid_size = grid_size
-#         self.start = tuple(start)
-#         self.goal = tuple(goal)
-#         self.topology = topology
-#         self.moves = self.get_moves()
-
-#     def get_moves(self):
-#         if self.topology == "moore":
-#             return [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-#         else:
-#             return [(-1, 0), (0, -1), (0, 1), (1, 0)]
-
-#     def heuristic(self, pos):
-#         return sum(abs(px - gx) + abs(py - gy) for (px, py), (gx, gy) in zip(pos, self.goal))
-
-#     def is_valid(self, positions):
-#         return all(0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1] for x, y in positions)
-
-#     def get_neighbors(self, current):
-#         neighbors = []
-#         for move in self.moves:
-#             new_positions = tuple((x + move[0], y + move[1]) for x, y in current)
-#             if self.is_valid(new_positions) and len(set(new_positions)) == len(current):
-#                 neighbors.append(new_positions)
-#         return neighbors
-
-#     def search(self):
-#         open_list = []
-#         heapq.heappush(open_list, (0, self.start))
-#         came_from = {self.start: None}
-#         g_score = {self.start: 0}
-
-#         while open_list:
-#             _, current = heapq.heappop(open_list)
-#             if current == self.goal:
-#                 return self.reconstruct_path(came_from)
-            
-#             for neighbor in self.get_neighbors(current):
-#                 temp_g_score = g_score[current] + 1
-#                 if neighbor not in g_score or temp_g_score < g_score[neighbor]:
-#                     g_score[neighbor] = temp_g_score
-#                     f_score = temp_g_score + self.heuristic(neighbor)
-#                     heapq.heappush(open_list, (f_score, neighbor))
-#                     came_from[neighbor] = current
-#         return None
-
-#     def reconstruct_path(self, came_from):
-#         path = []
-#         current = self.goal
-#         while current:
-#             path.append(current)
-#             current = came_from[current]
-#         return path[::-1]
 import heapq
-from itertools import permutations
+from itertools import permutations,product
 from collections import deque
 
 class AI_Agent:
@@ -101,20 +44,16 @@ class AI_Agent:
         while remaining connected.
         """
         neighbors = []
-        current_set = set(current)
+        move_combinations = product(self.moves, repeat=len(current))
 
-        for i, (x, y) in enumerate(current):
-            for dx, dy in self.moves:
-                new_pos = (x + dx, y + dy)
-                if new_pos not in current_set and self.is_within_bounds(new_pos):
-                    new_positions = list(current)
-                    new_positions[i] = new_pos
-                    new_positions = tuple(sorted(new_positions))  # Normalize order
+        for move_set in move_combinations:
+            new_positions = tuple(sorted((x + dx, y + dy) for (x, y), (dx, dy) in zip(current, move_set)))
 
-                    if self.is_connected(new_positions):
-                        neighbors.append(new_positions)
-
+        # Check if the new positions are valid
+            if self.is_valid(new_positions) and self.is_connected(new_positions):
+                neighbors.append(new_positions)
         return neighbors
+    
 
     def is_within_bounds(self, pos):
         """Checks if a position is inside the grid."""
