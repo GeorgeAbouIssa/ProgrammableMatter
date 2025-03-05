@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 
 # Example usage
 grid_size = (10, 10)
-start_positions = [(5, 5), (5, 6)]
-goal_positions = [(8, 7), (8, 8)]
+start_positions = [(0,0),(0,1)]
+goal_positions = [(0,9),(1,9)]
 agent = AI_Agent(grid_size, start_positions, goal_positions, topology="moore")
 
 path = agent.search()
