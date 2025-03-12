@@ -107,5 +107,3 @@ class AI_Agent:
             path.append(current)
             current = came_from[current]
         return path[::-1]  # Return reversed path
-
-
