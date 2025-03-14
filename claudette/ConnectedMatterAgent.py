@@ -32,6 +32,10 @@ class ConnectedMatterAgent:
         self.articulation_points_cache = {}
         self.connectivity_check_cache = {}
         
+        # Enhanced parameters for improved search
+        self.beam_width = 150  # Increased beam width for better exploration
+        self.max_iterations = 10000  # Limit iterations to prevent infinite loops
+        
     def calculate_centroid(self, positions):
         """Calculate the centroid (average position) of a set of positions"""
         if not positions:
@@ -159,7 +163,7 @@ class ConnectedMatterAgent:
     def get_valid_morphing_moves(self, state):
         """
         Generate valid morphing moves that maintain connectivity
-        Uses a priority queue to focus on promising moves first
+        Using a smarter approach that considers critical points
         """
         state_key = hash(state)
         if state_key in self.valid_moves_cache:
@@ -172,113 +176,64 @@ class ConnectedMatterAgent:
         articulation_points = self.get_articulation_points(state_set)
         movable_points = state_set - articulation_points
         
-        # If no non-critical points (all are articulation points), try carefully moving articulation points
+        # If all points are critical, try moving one anyway but verify connectivity
         if not movable_points and articulation_points:
-            for pos in articulation_points:
-                # Try removing this point, check if structure remains connected
-                temp_state = state_set - {pos}
-                if self.is_connected(temp_state):  # If still connected without this point
-                    movable_points.add(pos)  # This articulation point can be safely moved
-        
-        # For each movable point, find valid target positions that maintain connectivity
-        positions_to_try = movable_points if movable_points else state_set
-        
-        # Calculate distances to goal for each position - optimization for priority queue
-        position_distances = {}
-        for pos in positions_to_try:
-            # Find the closest goal position for this point
-            min_dist_to_goal = float('inf')
-            for goal_pos in self.goal_state:
-                dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
-                if dist < min_dist_to_goal:
-                    min_dist_to_goal = dist
-            position_distances[pos] = min_dist_to_goal
-        
-        # Sort positions by distance to goal (closest first for better pruning)
-        sorted_positions = sorted(positions_to_try, key=lambda p: position_distances[p])
-        
-        # Process positions in order of distance to goal
-        for pos in sorted_positions:
-            # Try to move this point in each direction
+            for point in articulation_points:
+                # Try removing and see if structure remains connected
+                temp_state = state_set.copy()
+                temp_state.remove(point)
+                if self.is_connected(temp_state):
+                    movable_points.add(point)
+            
+        # For each movable point, find valid moves
+        for point in movable_points:
+            # Try moving in each direction
             for dx, dy in self.directions:
-                new_pos = (pos[0] + dx, pos[1] + dy)
+                new_pos = (point[0] + dx, point[1] + dy)
                 
                 # Skip if out of bounds
                 if not (0 <= new_pos[0] < self.grid_size[0] and 
                         0 <= new_pos[1] < self.grid_size[1]):
                     continue
-                    
+                
                 # Skip if already occupied
                 if new_pos in state_set:
                     continue
                 
-                # Create new state with this element moved
+                # Create new state by moving the point
                 new_state_set = state_set.copy()
-                new_state_set.remove(pos)
+                new_state_set.remove(point)
                 new_state_set.add(new_pos)
                 
-                # Check if the new position is adjacent to at least one other element
-                # This ensures we maintain connectivity at the local level
-                has_neighbor = False
-                for dx2, dy2 in self.directions:
-                    neighbor = (new_pos[0] + dx2, new_pos[1] + dy2)
-                    if neighbor in new_state_set and neighbor != new_pos:
-                        has_neighbor = True
+                # Check if new position is adjacent to at least one other point
+                has_adjacent = False
+                for adj_dx, adj_dy in self.directions:
+                    adj_pos = (new_pos[0] + adj_dx, new_pos[1] + adj_dy)
+                    if adj_pos in new_state_set and adj_pos != new_pos:
+                        has_adjacent = True
                         break
                 
                 # Only consider moves that maintain connectivity
-                if has_neighbor and self.is_connected(new_state_set):
-                    new_state_frozen = frozenset(new_state_set)
-                    valid_moves.append(new_state_frozen)
+                if has_adjacent and self.is_connected(new_state_set):
+                    valid_moves.append(frozenset(new_state_set))
         
-        # Cache and return results
+        # Cache results
         self.valid_moves_cache[state_key] = valid_moves
         return valid_moves
     
-    def get_connected_chain_moves(self, state):
+    def get_smart_chain_moves(self, state):
         """
-        Generate moves where blocks move in a chain-like fashion while maintaining connectivity
-        This helps navigate tight spaces and overcome local minima
+        Generate chain moves where one block moves into the space of another
+        while that block moves elsewhere, maintaining connectivity
         """
         state_set = set(state)
         valid_moves = []
         
-        # Identify potential chain moves: cells that can move to goal positions directly
-        for pos in state_set:
-            # Skip articulation points for now - they're handled separately
-            if pos in self.get_articulation_points(state_set):
-                continue
-                
-            # For each potential goal position that this cell could move to
-            for goal_pos in self.goal_state:
-                # If goal position is already occupied, skip
-                if goal_pos in state_set:
-                    continue
-                    
-                # Check if goal position is within moving range
-                manhattan_dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
-                
-                # For direct moves (manhattan distance = 1) or diagonal moves
-                if manhattan_dist <= 2:  # Direct neighbors or diagonal
-                    # Check if direct move is possible
-                    dx = goal_pos[0] - pos[0]
-                    dy = goal_pos[1] - pos[1]
-                    
-                    # Try moving this block to goal position
-                    new_state_set = state_set.copy()
-                    new_state_set.remove(pos)
-                    new_state_set.add(goal_pos)
-                    
-                    # Only consider if connectivity is maintained
-                    if self.is_connected(new_state_set):
-                        valid_moves.append(frozenset(new_state_set))
-                        
-        # Chain moves: slide multiple blocks in sequence
-        # Find blocks that should move toward goal but can't move directly
+        # For each block, try to move it toward a goal position
         for pos in state_set:
             # Find closest goal position
-            closest_goal = None
             min_dist = float('inf')
+            closest_goal = None
             
             for goal_pos in self.goal_state:
                 if goal_pos not in state_set:  # Only consider unoccupied goals
@@ -287,77 +242,123 @@ class ConnectedMatterAgent:
                         min_dist = dist
                         closest_goal = goal_pos
             
-            if closest_goal is None:
+            if not closest_goal:
                 continue
                 
-            # Try to move toward this goal by sliding blocks
+            # Calculate direction toward goal
             dx = 1 if closest_goal[0] > pos[0] else -1 if closest_goal[0] < pos[0] else 0
             dy = 1 if closest_goal[1] > pos[1] else -1 if closest_goal[1] < pos[1] else 0
             
-            # Target position is one step in the direction of the goal
-            target_pos = (pos[0] + dx, pos[1] + dy)
+            # Try moving in that direction
+            next_pos = (pos[0] + dx, pos[1] + dy)
             
-            # If target position is out of bounds or not occupied, skip
-            if not (0 <= target_pos[0] < self.grid_size[0] and 
-                    0 <= target_pos[1] < self.grid_size[1]):
+            # Skip if out of bounds
+            if not (0 <= next_pos[0] < self.grid_size[0] and 
+                    0 <= next_pos[1] < self.grid_size[1]):
                 continue
-                
-            # If target position is not in our current state, we can move directly
-            if target_pos not in state_set:
-                # Create new state with this element moved
+            
+            # If next position is occupied, try chain move
+            if next_pos in state_set:
+                # Try moving the blocking block elsewhere
+                for chain_dx, chain_dy in self.directions:
+                    chain_pos = (next_pos[0] + chain_dx, next_pos[1] + chain_dy)
+                    
+                    # Skip if out of bounds, occupied, or original position
+                    if not (0 <= chain_pos[0] < self.grid_size[0] and 
+                            0 <= chain_pos[1] < self.grid_size[1]):
+                        continue
+                    if chain_pos in state_set or chain_pos == pos:
+                        continue
+                    
+                    # Create new state by moving both blocks
+                    new_state_set = state_set.copy()
+                    new_state_set.remove(pos)
+                    new_state_set.remove(next_pos)
+                    new_state_set.add(next_pos)
+                    new_state_set.add(chain_pos)
+                    
+                    # Check if new state is connected
+                    if self.is_connected(new_state_set):
+                        valid_moves.append(frozenset(new_state_set))
+            
+            # If next position is unoccupied, try direct move
+            else:
                 new_state_set = state_set.copy()
                 new_state_set.remove(pos)
-                new_state_set.add(target_pos)
+                new_state_set.add(next_pos)
                 
-                # Check connectivity
-                if self.is_connected(new_state_set):
-                    valid_moves.append(frozenset(new_state_set))
-                continue
-                
-            # If target position is occupied, try chain move
-            # Find where the occupying block could move
-            for chain_dx, chain_dy in self.directions:
-                chain_target = (target_pos[0] + chain_dx, target_pos[1] + chain_dy)
-                
-                # Skip if out of bounds or already occupied
-                if not (0 <= chain_target[0] < self.grid_size[0] and 
-                        0 <= chain_target[1] < self.grid_size[1]):
-                    continue
-                if chain_target in state_set or chain_target == pos:
-                    continue
-                    
-                # Try chain move: move occupying block first, then fill its spot
-                new_state_set = state_set.copy()
-                new_state_set.remove(target_pos)  # Remove block in the way
-                new_state_set.add(chain_target)   # Move it to new position
-                
-                # Check if this intermediate state maintains connectivity
-                if not self.is_connected(new_state_set):
-                    continue
-                    
-                # Now move original block to the freed position
-                new_state_set.remove(pos)
-                new_state_set.add(target_pos)
-                
-                # Final check for connectivity
+                # Check if new state is connected
                 if self.is_connected(new_state_set):
                     valid_moves.append(frozenset(new_state_set))
         
         return valid_moves
     
-    def get_all_valid_morphing_moves(self, state):
+    def get_sliding_chain_moves(self, state):
         """
-        Combine different types of morphing moves to maximize options
-        while ensuring connectivity is maintained
+        Generate sliding chain moves where multiple blocks move in sequence
+        to navigate tight spaces
         """
-        # Get basic single-element moves
-        single_moves = self.get_valid_morphing_moves(state)
+        state_set = set(state)
+        valid_moves = []
         
-        # Get chain-like moves for better navigation
-        chain_moves = self.get_connected_chain_moves(state)
+        # For each block, try to initiate a sliding chain
+        for pos in state_set:
+            # Skip if it's a critical articulation point
+            articulation_points = self.get_articulation_points(state_set)
+            if pos in articulation_points and len(articulation_points) <= 2:
+                continue
+                
+            # Try sliding in each direction
+            for dx, dy in self.directions:
+                # Only consider diagonal moves for sliding chains
+                if dx != 0 and dy != 0:
+                    # Define the sliding path (up to 3 steps)
+                    path = []
+                    current_pos = pos
+                    for _ in range(3):  # Maximum chain length
+                        next_pos = (current_pos[0] + dx, current_pos[1] + dy)
+                        # Stop if out of bounds
+                        if not (0 <= next_pos[0] < self.grid_size[0] and 
+                                0 <= next_pos[1] < self.grid_size[1]):
+                            break
+                        path.append(next_pos)
+                        current_pos = next_pos
+                    
+                    # Try sliding the block along the path
+                    for i, target_pos in enumerate(path):
+                        # Skip if target is occupied
+                        if target_pos in state_set:
+                            continue
+                            
+                        # Create new state by moving the block
+                        new_state_set = state_set.copy()
+                        new_state_set.remove(pos)
+                        new_state_set.add(target_pos)
+                        
+                        # Check if new state is connected
+                        if self.is_connected(new_state_set):
+                            valid_moves.append(frozenset(new_state_set))
+                        
+                        # No need to continue if we can't reach this position
+                        break
         
-        # Combine all move types (removing duplicates due to frozenset keys)
-        all_moves = list(set(single_moves + chain_moves))
+        return valid_moves
+    
+    def get_all_valid_moves(self, state):
+        """
+        Combine all move generation methods to maximize options
+        """
+        # Start with basic morphing moves
+        basic_moves = self.get_valid_morphing_moves(state)
+        
+        # Add chain moves
+        chain_moves = self.get_smart_chain_moves(state)
+        
+        # Add sliding chain moves
+        sliding_moves = self.get_sliding_chain_moves(state)
+        
+        # Combine all moves (frozensets automatically handle duplicates)
+        all_moves = list(set(basic_moves + chain_moves + sliding_moves))
         
         return all_moves
     
@@ -375,10 +376,10 @@ class ConnectedMatterAgent:
         return abs(current_centroid[0] - self.goal_centroid[0]) + \
                abs(current_centroid[1] - self.goal_centroid[1])
     
-    def morphing_heuristic(self, state):
+    def improved_morphing_heuristic(self, state):
         """
-        Enhanced heuristic for morphing phase:
-        Uses bipartite matching to find optimal assignment with connectivity penalties
+        Improved heuristic for morphing phase:
+        Uses bipartite matching to find optimal assignment of blocks to goal positions
         """
         if not state:
             return float('inf')
@@ -400,53 +401,38 @@ class ConnectedMatterAgent:
                 row.append(dist)
             distances.append(row)
         
-        # Use Hungarian algorithm to find minimum cost assignment
-        # (simplified implementation)
-        assigned = [-1] * len(state_list)
-        min_cost = self.find_min_cost_assignment(distances, assigned)
-        
-        # Connectivity is inherently maintained by our move generation
-        # But add a large penalty if somehow disconnected
-        connectivity_penalty = 0 if self.is_connected(state) else 1000
-        
-        return min_cost + connectivity_penalty
-    
-    def find_min_cost_assignment(self, cost_matrix, assignment):
-        """
-        Improved assignment algorithm using a greedy approach
-        """
-        n = len(cost_matrix)
-        total_cost = 0
-        
-        # Make a copy to avoid modifying the original
-        costs = [row[:] for row in cost_matrix]
-        
-        # For each position, find best assignment greedily
+        # Use greedy assignment algorithm
+        # This is faster than full Hungarian algorithm but still gives good results
+        total_distance = 0
         assigned_cols = set()
         
-        # Sort rows by minimum cost (assign positions with few good options first)
-        row_min_costs = [(min(costs[i]), i) for i in range(n)]
-        row_min_costs.sort()  # Sort by minimum cost
+        # Sort rows by minimum distance
+        row_indices = list(range(len(state_list)))
+        row_indices.sort(key=lambda i: min(distances[i]))
         
-        for _, i in row_min_costs:
-            min_cost = float('inf')
-            min_col = -1
+        for i in row_indices:
+            # Find closest unassigned goal position
+            min_dist = float('inf')
+            best_j = -1
             
-            for j in range(n):
-                if j not in assigned_cols and costs[i][j] < min_cost:
-                    min_cost = costs[i][j]
-                    min_col = j
+            for j in range(len(goal_list)):
+                if j not in assigned_cols and distances[i][j] < min_dist:
+                    min_dist = distances[i][j]
+                    best_j = j
             
-            if min_col != -1:
-                assignment[i] = min_col
-                assigned_cols.add(min_col)
-                total_cost += min_cost
+            if best_j != -1:
+                assigned_cols.add(best_j)
+                total_distance += min_dist
             else:
-                # No assignment found for this row
-                return float('inf')  # Invalid assignment
+                # No assignment possible
+                return float('inf')
         
-        return total_cost
-
+        # Add connectivity bonus: prefer states that have more blocks in goal positions
+        matching_positions = len(state.intersection(self.goal_state))
+        connectivity_bonus = -matching_positions * 0.5  # Negative to encourage more matches
+        
+        return total_distance + connectivity_bonus
+    
     def block_movement_phase(self, time_limit=15):
         """
         Phase 1: Move the entire block toward the goal centroid
@@ -512,32 +498,29 @@ class ConnectedMatterAgent:
             return self.reconstruct_path(came_from, best_state)
         
         return [self.start_state]  # No movement possible
-
-    def connected_morphing_phase(self, start_state, time_limit=15):
+    
+    def smarter_morphing_phase(self, start_state, time_limit=15):
         """
-        NEW Phase 2: Morph the block into the final shape while maintaining connectivity
-        Always ensures the structure remains connected at every step
+        Improved Phase 2: Morph the block into the goal shape while maintaining connectivity
+        Uses beam search and intelligent move generation
         """
-        print("Starting Connected Morphing Phase...")
+        print("Starting Smarter Morphing Phase...")
         start_time = time.time()
-    
-        # Initialize A* search
-        open_set = [(self.morphing_heuristic(start_state), 0, start_state)]
+        
+        # Initialize beam search
+        open_set = [(self.improved_morphing_heuristic(start_state), 0, start_state)]
         closed_set = set()
-    
-        # Track path and g-scores
+        
+        # Track path, g-scores, and best state
         g_score = {start_state: 0}
         came_from = {start_state: None}
-    
-        # Track best solution so far for anytime behavior
-        best_state = start_state
-        best_score = self.morphing_heuristic(start_state)
         
-        # For beam search - keep track of the best k states at each depth
-        beam_width = 100  # Number of states to keep at each depth
+        # Track best state seen so far
+        best_state = start_state
+        best_heuristic = self.improved_morphing_heuristic(start_state)
         
         iterations = 0
-        last_progress = time.time()
+        last_improvement_time = time.time()
         
         while open_set and time.time() - start_time < time_limit:
             iterations += 1
@@ -545,108 +528,114 @@ class ConnectedMatterAgent:
             # Get state with lowest f-score
             f, g, current = heapq.heappop(open_set)
             
-            # For beam search, periodically prune open_set to keep only the best k states
-            if iterations % 100 == 0 and len(open_set) > beam_width:
-                open_set = heapq.nsmallest(beam_width, open_set)
-                heapq.heapify(open_set)
-            
             # Skip if already processed
             if current in closed_set:
                 continue
             
-            # Check if this is the best state so far
-            current_score = self.morphing_heuristic(current)
-            if current_score < best_score:
-                best_score = current_score
-                best_state = current
-                last_progress = time.time()
-                
-                # If we've made significant progress, report it
-                if iterations % 500 == 0:
-                    print(f"Progress: score={best_score}, iterations={iterations}")
-            
             # Check if goal reached
             if current == self.goal_state:
+                print(f"Goal reached after {iterations} iterations!")
                 return self.reconstruct_path(came_from, current)
             
-            # If no progress in a while, prioritize exploration
-            if time.time() - last_progress > time_limit * 0.3:
-                # Reset and try exploring from the best state found so far
-                if best_state != current:
-                    print("Restarting search from best state found so far...")
-                    return self.reconstruct_path(came_from, best_state)
+            # Check if this is the best state seen so far
+            current_heuristic = self.improved_morphing_heuristic(current)
+            if current_heuristic < best_heuristic:
+                best_state = current
+                best_heuristic = current_heuristic
+                last_improvement_time = time.time()
+                
+                # Print progress occasionally
+                if iterations % 500 == 0:
+                    print(f"Progress: h={best_heuristic}, iterations={iterations}")
             
+            # Check for stagnation
+            if time.time() - last_improvement_time > time_limit * 0.3:
+                print("Search stagnated, restarting...")
+                # Clear the beam and start from the best state
+                open_set = [(best_heuristic, g_score[best_state], best_state)]
+                last_improvement_time = time.time()
+            
+            # Limit iterations to prevent infinite loops
+            if iterations >= self.max_iterations:
+                print(f"Reached max iterations ({self.max_iterations})")
+                break
+                
             closed_set.add(current)
             
-            # Process neighbor states with all valid connected moves
-            for neighbor in self.get_all_valid_morphing_moves(current):
+            # Get all valid moves
+            neighbors = self.get_all_valid_moves(current)
+            
+            # Process each neighbor
+            for neighbor in neighbors:
                 if neighbor in closed_set:
                     continue
                 
                 # Calculate tentative g-score
                 tentative_g = g_score[current] + 1
-            
+                
                 if neighbor not in g_score or tentative_g < g_score[neighbor]:
                     # This is a better path
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
-                    f_score = tentative_g + self.morphing_heuristic(neighbor)
-                
+                    f_score = tentative_g + self.improved_morphing_heuristic(neighbor)
+                    
                     # Add to open set
                     heapq.heappush(open_set, (f_score, tentative_g, neighbor))
-    
+            
+            # Beam search pruning: keep only the best states
+            if len(open_set) > self.beam_width:
+                open_set = heapq.nsmallest(self.beam_width, open_set)
+                heapq.heapify(open_set)
+        
         # If we exit the loop, either no path was found or time limit reached
         if time.time() - start_time >= time_limit:
             print(f"Morphing phase timed out after {iterations} iterations!")
-    
-        # Return the best solution found so far
+        
+        # Return the best state found
         return self.reconstruct_path(came_from, best_state)
-
+    
     def reconstruct_path(self, came_from, current):
         """
-        Reconstruct the path from start to goal.
-        Returns a list of states (each state is a set of positions).
+        Reconstruct the path from start to goal
         """
         path = []
         while current:
-            # Convert frozenset to list of tuples for visualization
-            path.append([pos for pos in current])
+            path.append(list(current))
             current = came_from.get(current)
-    
-        path.reverse()  # Start to goal
+        
+        path.reverse()
         return path
     
     def search(self, time_limit=30):
         """
-        Main search method implementing the two-phase approach
-        with improved connectivity maintenance during morphing
+        Main search method combining block movement and smarter morphing
         """
         # Allocate time for each phase
-        block_time_limit = time_limit * 0.3  # 30% of time for block movement
-        morphing_time_limit = time_limit * 0.7  # 70% of time for morphing
-    
+        block_time_limit = time_limit * 0.3  # 30% for block movement
+        morphing_time_limit = time_limit * 0.7  # 70% for morphing
+        
         # Phase 1: Block Movement
         block_path = self.block_movement_phase(block_time_limit)
-    
+        
         if not block_path:
-            print("Block movement phase failed to find a path")
+            print("Block movement phase failed!")
             return None
         
         # Get the final state from block movement phase
         block_final_state = frozenset(block_path[-1])
-    
-        # Phase 2: Connected Morphing - modified to always maintain connectivity
-        morphing_path = self.connected_morphing_phase(block_final_state, morphing_time_limit)
-    
+        
+        # Phase 2: Smarter Morphing
+        morphing_path = self.smarter_morphing_phase(block_final_state, morphing_time_limit)
+        
         if not morphing_path:
-            print("Morphing phase failed to find a path")
-            return block_path  # Return just the block movement path
+            print("Morphing phase failed!")
+            return block_path
         
         # Combine paths (remove duplicate state at transition)
         combined_path = block_path[:-1] + morphing_path
-    
+        
         return combined_path
-
+    
     def visualize_path(self, path, interval=0.5):
         """
         Visualize the path as an animation

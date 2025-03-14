@@ -103,7 +103,7 @@ class Visualizer:
             for (x, y) in step:
                 self.ax.add_patch(plt.Rectangle((y, x), 1, 1, color=colors[0]))
             
-            plt.pause(0.2)  # Slow down animation for visibility
+            plt.pause(1)  # Slow down animation for visibility
             self.current_step += 1  # Move to the next step
 
         # Mark animation as complete and update button
