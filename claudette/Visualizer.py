@@ -17,7 +17,7 @@ class Visualizer:
 
         # Create button
         self.button_ax = self.fig.add_axes([0.4, 0.05, 0.2, 0.075])  # Center the button
-        self.button = Button(self.button_ax, "Start")
+        self.button = Button(self.button_ax, "Search")
         self.button.on_clicked(self.handle_button_click)
 
         # Initialize text annotation for status messages
@@ -67,7 +67,7 @@ class Visualizer:
             self.animation_done = False
             self.animation_started = False
             self.current_step = 0  # Reset animation step
-            self.button.label.set_text("Pause")
+            self.button.label.set_text("Restart")
             self.animate_path()
         elif not self.animation_started:
             # Start animation for the first time
@@ -87,7 +87,7 @@ class Visualizer:
             self.update_text("No paths found", color="red")
             return
 
-        self.update_text("Path found", color="green")
+        self.update_text("Animating...", color = "black")
 
         colors = ['grey']
 
@@ -103,7 +103,7 @@ class Visualizer:
             for (x, y) in step:
                 self.ax.add_patch(plt.Rectangle((y, x), 1, 1, color=colors[0]))
             
-            plt.pause(0.1)  # Slow down animation for visibility
+            plt.pause(0.2)  # Slow down animation for visibility
             self.current_step += 1  # Move to the next step
 
         # Mark animation as complete and update button
