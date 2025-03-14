@@ -46,7 +46,8 @@ class SearchController:
     def run_search(self, event):
         """Runs the search when the Start button is clicked."""
         self.vis.update_text("Searching for a path...", color="red")
-        plt.pause(0.1)  # Force update to show "Searching..." before search starts
+        plt.pause(1)  # Force update to show "Searching..." before search starts
+        
 
         print("\nSearching for optimal path with connectivity constraint...")
         start_time = time.time()
@@ -60,10 +61,11 @@ class SearchController:
             self.vis.button.label.set_text("Start")  # Reset button text
             self.vis.update_text(f"Path found ({len(path)-1} moves)", color="green")
             plt.draw()
+
         else:
             print(f"No path found after {search_time:.2f} seconds")
             self.vis.update_text("No path found", color="red")
-            plt.draw()
+            plt.draw()   
 
 # Example usage
 if __name__ == "__main__":
@@ -78,10 +80,17 @@ if __name__ == "__main__":
     
     start_positions = [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
                        (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9)]
-    goal_positions = [(8, 4), (8, 5), (7, 3), (7, 4), (7, 5), (7, 6), (6, 2), (6, 3), (6, 6), (6, 7),
-                      (5, 2), (5, 3), (5, 6), (5, 7), (4, 3), (4, 4), (4, 5), (4, 6), (3, 4), (3, 5)]
+    # Ring shape formation
+    # goal_positions = [(7, 4), (7, 5), (6, 3), (6, 4), (6, 5), (6, 6), (5, 2), (5, 3), (5, 6), (5, 7),
+    #                   (4, 2), (4, 3), (4, 6), (4, 7), (3, 3), (3, 4), (3, 5), (3, 6), (2, 4), (2, 5)]
     
+    # Rectangle shape formation
+    # goal_positions =  [(3, 3), (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7),
+    #                    (5, 3), (5, 4), (5, 5), (5, 6), (5, 7), (6, 3), (6, 4), (6, 5), (6, 6), (6, 7)]
     
+    # Triangle shape formation
+    goal_positions = [(2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (3, 2), (3, 3),
+                      (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 4), (4, 5), (4, 6), (5, 4), (5, 5)]   
     controller = SearchController(grid_size, start_positions, goal_positions, "moore", 30)
 
     plt.ioff()  # Disable interactive mode
