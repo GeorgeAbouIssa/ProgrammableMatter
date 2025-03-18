@@ -1,15 +1,13 @@
 import heapq
 from collections import defaultdict
 import time
-import itertools
 
-class AI_Agent_Parallel:
-    def __init__(self, grid_size, start, goal, topology="moore", max_parallel_moves=6):
+class Search_Agent:
+    def __init__(self, grid_size, start, goal, topology="moore"):
         self.grid_size = grid_size
         self.start_positions = list(start)  # Keep original format for reference
         self.goal_positions = list(goal)    # Keep original format for reference
         self.topology = topology
-        self.max_parallel_moves = max_parallel_moves  # Maximum number of elements that can move in parallel
         
         # Convert positions to more efficient representation for path finding
         self.start_state = frozenset((x, y) for x, y in start)
@@ -96,21 +94,21 @@ class AI_Agent_Parallel:
                 
         return total
 
-    def get_valid_parallel_moves(self, state):
+    def get_valid_moves(self, state):
         """
-        Generate all valid parallel moves from the current state.
-        Returns a list of next states where multiple elements can move simultaneously.
+        Generate all valid single-element moves from the current state.
+        Uses caching to improve performance.
         """
+        # Check if we've already computed moves for this state
         state_key = hash(state)
         if state_key in self.valid_moves_cache:
             return self.valid_moves_cache[state_key]
             
-        # First, get all possible individual element moves
+        valid_moves = []
         state_set = set(state)
-        element_moves = {}  # Maps positions to their possible moves
         
+        # Try moving each element in each direction
         for pos in state:
-            possible_moves = []
             for dx, dy in self.directions:
                 new_pos = (pos[0] + dx, pos[1] + dy)
                 
@@ -118,35 +116,13 @@ class AI_Agent_Parallel:
                 if (0 <= new_pos[0] < self.grid_size[0] and 
                     0 <= new_pos[1] < self.grid_size[1] and 
                     new_pos not in state_set):
-                    possible_moves.append(new_pos)
-            
-            if possible_moves:
-                element_moves[pos] = possible_moves
-        
-        # Generate all valid combinations of parallel moves
-        valid_moves = []
-        
-        # Iterate through different numbers of elements moving in parallel
-        for num_moving in range(1, min(len(element_moves) + 1, self.max_parallel_moves + 1)):
-            # Consider all possible combinations of elements to move
-            for elements_to_move in itertools.combinations(element_moves.keys(), num_moving):
-                # For each combination, consider all possible move combinations
-                move_options = [element_moves[pos] for pos in elements_to_move]
-                
-                # Generate all combinations of these moves
-                for move_combination in itertools.product(*move_options):
-                    # Check if this combination would result in overlapping positions
-                    new_positions = set(move_combination)
-                    if len(new_positions) != len(move_combination):
-                        continue  # Skip if there are overlaps
                     
-                    # Create the new state
+                    # Create new state with this element moved
                     new_state = state_set.copy()
-                    for i, pos in enumerate(elements_to_move):
-                        new_state.remove(pos)
-                        new_state.add(move_combination[i])
+                    new_state.remove(pos)
+                    new_state.add(new_pos)
                     
-                    # Convert to frozenset for immutability
+                    # Convert to frozenset for immutability (required for dict keys)
                     new_state_frozen = frozenset(new_state)
                     valid_moves.append(new_state_frozen)
         
@@ -156,13 +132,12 @@ class AI_Agent_Parallel:
 
     def a_star_search(self, time_limit=30):
         """
-        A* search algorithm with parallel movement capability.
+        A* search algorithm with time limit and early termination optimizations.
         Returns the path from start to goal if found within time limit.
         """
         start_time = time.time()
         
         open_set = [(self.heuristic(self.start_state), 0, self.start_state)]
-        heapq.heapify(open_set)
         closed_set = set()
         
         # Track path and g-scores
@@ -183,12 +158,12 @@ class AI_Agent_Parallel:
                 
             closed_set.add(current)
             
-            # Process neighbor states with parallel moves
-            for neighbor in self.get_valid_parallel_moves(current):
+            # Process neighbor states
+            for neighbor in self.get_valid_moves(current):
                 if neighbor in closed_set:
                     continue
                     
-                # Calculate tentative g-score (cost is 1 per step, regardless of how many elements move)
+                # Calculate tentative g-score
                 tentative_g = g_score[current] + 1
                 
                 if neighbor not in g_score or tentative_g < g_score[neighbor]:
