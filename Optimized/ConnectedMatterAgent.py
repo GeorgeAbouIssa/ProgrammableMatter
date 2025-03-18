@@ -35,7 +35,7 @@ class ConnectedMatterAgent:
         self.connectivity_check_cache = {}
         
         # Enhanced parameters for improved search
-        self.beam_width = 150  # Increased beam width for better exploration
+        self.beam_width = 500  # Increased beam width for better exploration
         self.max_iterations = 10000  # Limit iterations to prevent infinite loops
         
     def calculate_centroid(self, positions):
