@@ -7,7 +7,7 @@ from Search_Agent import Search_Agent
 from Visualizer import Visualizer
 
 class SearchController:
-    def __init__(self, grid_size, formations, topology="moore", time_limit=30):
+    def __init__(self, grid_size, formations, topology="moore", time_limit=200):
         self.grid_size = grid_size
         self.formations = formations  # Dictionary of shape names and their goal positions
         self.start_positions = formations["start"]
