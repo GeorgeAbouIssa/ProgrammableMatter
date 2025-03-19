@@ -178,7 +178,7 @@ class ConnectedMatterAgent:
         articulation_points = self.get_articulation_points(state_set)
         movable_points = state_set - articulation_points
         
-        # If all points are critical, try moving one anyway but verify connectivity 
+        # If all points are critical, try moving one anyway but verify connectivity
         if not movable_points and articulation_points:
             for point in articulation_points:
                 # Try removing and see if structure remains connected
@@ -307,7 +307,7 @@ class ConnectedMatterAgent:
         for pos in state_set:
             # Skip if it's a critical articulation point
             articulation_points = self.get_articulation_points(state_set)
-            if pos in articulation_points and len(articulation_points) <= 2:
+            if pos in articulation_points and len(articulation_points) <= 20:
                 continue
                 
             # Try sliding in each direction
@@ -403,6 +403,7 @@ class ConnectedMatterAgent:
             distances.append(row)
         
         # Use greedy assignment algorithm
+        # This is faster than full Hungarian algorithm but still gives good results
         total_distance = 0
         assigned_cols = set()
         
