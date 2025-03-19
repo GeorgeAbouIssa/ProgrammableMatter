@@ -7,7 +7,7 @@ from ConnectedMatterAgent import ConnectedMatterAgent
 from Visualizer import Visualizer
 
 class SearchController:
-    def __init__(self, grid_size, formations, topology="moore", time_limit=200):
+    def __init__(self, grid_size, formations, topology="moore", time_limit=1000):
         self.grid_size = grid_size
         self.formations = formations  # Dictionary of shape names and their goal positions
         self.start_positions = formations["start"]
@@ -219,7 +219,7 @@ if __name__ == "__main__":
                      (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 4), (4, 5), (4, 6), (5, 4), (5, 5)]
     }
     
-    controller = SearchController(grid_size, formations, "moore", 30)
+    controller = SearchController(grid_size, formations, "moore", 1000)
 
     plt.ioff()  # Disable interactive mode
     plt.show()  # Keep window open until manually closed

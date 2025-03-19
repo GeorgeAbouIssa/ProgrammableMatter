@@ -44,7 +44,7 @@ class ConnectedMatterAgent:
             return (0, 0)
         x_sum = sum(pos[0] for pos in positions)
         y_sum = sum(pos[1] for pos in positions)
-        return (x_sum / len(positions), y_sum / len(positions))
+        return (x_sum / len(positions), y_sum/ len(positions))
     
     def is_connected(self, positions):
         """Check if all positions are connected using BFS"""
@@ -375,8 +375,7 @@ class ConnectedMatterAgent:
         current_centroid = self.calculate_centroid(state)
         
         # Manhattan distance between centroids
-        return abs(current_centroid[0] - self.goal_centroid[0]) + \
-               abs(current_centroid[1] - self.goal_centroid[1])
+        return abs(current_centroid[0] - self.goal_centroid[0]) + abs(current_centroid[1] - self.goal_centroid[1] + 1)
     
     def improved_morphing_heuristic(self, state):
         """
@@ -452,7 +451,7 @@ class ConnectedMatterAgent:
         came_from = {self.start_state: None}
     
         # Target area reached when centroid distance is small enough
-        target_threshold = max(2, min(self.grid_size) // 5)  # Adaptive threshold based on grid size
+        target_threshold = max(2, min(self.grid_size) // 5) - 1 # Adaptive threshold based on grid size
     
         while open_set and time.time() - start_time < time_limit:
             # Get state with lowest f-score

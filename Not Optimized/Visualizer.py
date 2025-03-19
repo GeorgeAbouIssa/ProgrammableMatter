@@ -124,7 +124,7 @@ class Visualizer:
                 self.ax.add_patch(plt.Rectangle((y, x), 1, 1, color='grey'))
             # No more text labels
         
-            plt.pause(0.1)  # Slow down animation for visibility
+            plt.pause(0.05)  # Slow down animation for visibility
             self.current_step += 1  # Move to the next step
 
     # Animation completed
