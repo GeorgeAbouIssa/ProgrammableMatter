@@ -307,7 +307,7 @@ class ConnectedMatterAgent:
         for pos in state_set:
             # Skip if it's a critical articulation point
             articulation_points = self.get_articulation_points(state_set)
-            if pos in articulation_points and len(articulation_points) <= 2:
+            if pos in articulation_points and len(articulation_points) <= 20:
                 continue
                 
             # Try sliding in each direction

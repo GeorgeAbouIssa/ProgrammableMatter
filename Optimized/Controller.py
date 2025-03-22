@@ -2,7 +2,7 @@ import sys
 import matplotlib.pyplot as plt
 import time
 import numpy as np
-from matplotlib.widgets import Button, RadioButtons
+from matplotlib.widgets import Button, RadioButtons, TextBox
 from ConnectedMatterAgent import ConnectedMatterAgent
 from Visualizer import Visualizer
 
@@ -47,6 +47,25 @@ class SearchController:
         
         # Connect the mouse click event for grid selection
         self.vis.fig.canvas.mpl_connect('button_press_event', self.on_grid_click)
+
+        # Add label for grid size
+        label_ax = self.vis.fig.add_axes([0.82, 0.75, 0.15, 0.05])
+        label_ax.text(0.5, 0.5, 'Grid Size', ha='center', va='center')
+        label_ax.axis('off')
+        
+        # Add text input for grid size (centered, narrower)
+        self.grid_text_ax = self.vis.fig.add_axes([0.85, 0.7, 0.09, 0.05])  # Narrower width (0.09)
+        self.grid_text_box = TextBox(
+            self.grid_text_ax, 
+            '',  # Remove label since we added it separately above
+            initial=f"{grid_size[0]}",
+            textalignment='center'  # Center the text in the box
+        )
+        
+        # Add button to apply grid size (centered under text box)
+        self.grid_button_ax = self.vis.fig.add_axes([0.845, 0.63, 0.1, 0.05])
+        self.grid_button = Button(self.grid_button_ax, "Apply")
+        self.grid_button.on_clicked(self.change_grid_size)
 
         # Print initialization info
         print(f"Initializing Connected Programmable Matter Agent...")
@@ -200,14 +219,66 @@ class SearchController:
             self.vis.update_text("No paths found", color="red")
             plt.draw()
 
+    def on_text_submit(self, text):
+        """Handle grid size text submission"""
+        self.change_grid_size(None)  # Call change_grid_size when Enter is pressed
+            
+    def change_grid_size(self, event):
+        """Handle grid size change"""
+        try:
+            n = int(self.grid_text_box.text)
+            if n < 10:
+                self.vis.update_text("Grid size must be at least 10", color="red")
+                return
+            if n > 200:
+                self.vis.update_text("Grid size cannot exceed 200", color="red")
+                return
+
+            # Update grid size
+            self.grid_size = (n, n)
+            
+            # Update text box to show clean number
+            self.grid_text_box.set_val(str(n))
+            
+            # Reinitialize agent with new grid size
+            self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, self.goal_positions, self.topology)
+            
+            # Update visualization
+            self.vis.grid_size = self.grid_size
+            self.vis.draw_grid()
+            self.vis.update_text(f"Grid size updated to {n}x{n}", color="green")
+            
+            # Reset search state
+            self.search_completed = False
+            self.vis.animation_started = False
+            self.vis.animation_done = False
+            self.vis.current_step = 0
+            self.vis.path = None
+            
+        except ValueError:
+            self.vis.update_text("Invalid grid size. Enter a number between 10-200", color="red")
+
 # Example usage
 if __name__ == "__main__":
     grid_size = (10, 10)
+    # grid_size = (50, 50) # 50x50 grid
     
     # Dictionary of formations
     formations = {
         "start": [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
                   (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9)],
+        
+        # "start": [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
+        #           (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9), 
+        #           (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (2, 9),
+        #           (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7), (3, 8), (3, 9),
+        #           (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 8), (4, 9)],
+        
+        # "Ring": [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
+        #           (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9), 
+        #           (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (2, 9),
+        #           (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7), (3, 8), (3, 9),
+        #           (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 8), (4, 9)],
         
         "Ring": [(7, 4), (7, 5), (6, 3), (6, 4), (6, 5), (6, 6), (5, 2), (5, 3), (5, 6), (5, 7),
                  (4, 2), (4, 3), (4, 6), (4, 7), (3, 3), (3, 4), (3, 5), (3, 6), (2, 4), (2, 5)],

@@ -12,8 +12,8 @@ class Visualizer:
         self.current_step = 0  # Keep track of the animation step
         self.animation_started = False  # Track if animation has started
 
-        self.fig, self.ax = plt.subplots(figsize=(8, 8))  # Larger figure to accommodate the radio buttons
-        self.fig.subplots_adjust(left=0.1, right=0.9, bottom=0.2, top=0.9)  # Adjust margins to center the grid
+        self.fig, self.ax = plt.subplots(figsize=(12, 10))  # Larger figure
+        self.fig.subplots_adjust(left=0.2, right=0.8, bottom=0.2, top=0.95)  # Moved up by adjusting top margin
 
         # Create button (moved to the right side to make room for radio buttons)
         self.button_ax = self.fig.add_axes([0.7, 0.05, 0.2, 0.075])
