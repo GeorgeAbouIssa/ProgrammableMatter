@@ -1,5 +1,3 @@
-# First Code
-
 import heapq
 import time
 import matplotlib.pyplot as plt
@@ -25,6 +23,7 @@ class ConnectedMatterAgent:
         self.goal_state = frozenset((x, y) for x, y in goal_positions)
         
         # Calculate the centroid of the goal positions for block movement phase
+        # Using exact position calculation instead of average to ensure precise positioning
         self.goal_centroid = self.calculate_centroid(self.goal_positions)
         
         # Cache for valid moves to avoid recomputation
@@ -44,7 +43,7 @@ class ConnectedMatterAgent:
             return (0, 0)
         x_sum = sum(pos[0] for pos in positions)
         y_sum = sum(pos[1] for pos in positions)
-        return (x_sum / len(positions), y_sum/ len(positions))
+        return (x_sum / len(positions), y_sum / len(positions))
     
     def is_connected(self, positions):
         """Check if all positions are connected using BFS"""
@@ -374,8 +373,8 @@ class ConnectedMatterAgent:
             
         current_centroid = self.calculate_centroid(state)
         
-        # Manhattan distance between centroids
-        return abs(current_centroid[0] - self.goal_centroid[0]) + abs(current_centroid[1] - self.goal_centroid[1] + 1)
+        # Pure Manhattan distance between centroids without the +1 offset
+        return abs(current_centroid[0] - self.goal_centroid[0]) + abs(current_centroid[1] - self.goal_centroid[1])
     
     def improved_morphing_heuristic(self, state):
         """
@@ -437,66 +436,109 @@ class ConnectedMatterAgent:
         """
         Phase 1: Move the entire block toward the goal centroid
         Returns the path of states to get near the goal area
+        Modified to stop 1 grid cell before reaching the goal centroid
         """
         print("Starting Block Movement Phase...")
         start_time = time.time()
-    
-        # Initialize A* search
+
+    # Initialize A* search
         open_set = [(self.block_heuristic(self.start_state), 0, self.start_state)]
         closed_set = set()
-    
-        # Track path and g-scores
+
+    # Track path and g-scores
         g_score = {self.start_state: 0}
         came_from = {self.start_state: None}
-    
-        # Target area reached when centroid distance is small enough
-        target_threshold = max(2, min(self.grid_size) // 5) - 1 # Adaptive threshold based on grid size
-    
+
+    # Modified: We want to stop 1 grid cell before reaching the centroid
+    # Instead of using a small threshold, we'll check if distance is between 1.0 and 2.0
+    # This ensures we're approximately 1 grid cell away from the goal centroid
+        min_distance = 1.0
+        max_distance = 1.0
+
         while open_set and time.time() - start_time < time_limit:
             # Get state with lowest f-score
             f, g, current = heapq.heappop(open_set)
-        
-            # Skip if already processed
+    
+        # Skip if already processed
             if current in closed_set:
                 continue
-            
-            # Check if we're close enough to the goal centroid
+        
+        # Check if we're at the desired distance from the goal centroid
             current_centroid = self.calculate_centroid(current)
             centroid_distance = (abs(current_centroid[0] - self.goal_centroid[0]) + 
                             abs(current_centroid[1] - self.goal_centroid[1]))
-                            
-            if centroid_distance <= target_threshold:
+                        
+            if min_distance <= centroid_distance <= max_distance:
+                print(f"Block stopped 1 grid cell before goal centroid. Distance: {centroid_distance}")
                 return self.reconstruct_path(came_from, current)
-            
-            closed_set.add(current)
         
-            # Process neighbor states (block moves)
+            closed_set.add(current)
+    
+        # Process neighbor states (block moves)
             for neighbor in self.get_valid_block_moves(current):
                 if neighbor in closed_set:
                     continue
-                
-                # Calculate tentative g-score
-                tentative_g = g_score[current] + 1
             
+            # Calculate tentative g-score
+                tentative_g = g_score[current] + 1
+        
                 if neighbor not in g_score or tentative_g < g_score[neighbor]:
                     # This is a better path
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
-                    f_score = tentative_g + self.block_heuristic(neighbor)
                 
-                    # Add to open set
+                # Modified: Adjust heuristic to prefer states that are close to but not at the centroid
+                    neighbor_centroid = self.calculate_centroid(neighbor)
+                    neighbor_distance = (abs(neighbor_centroid[0] - self.goal_centroid[0]) + 
+                                   abs(neighbor_centroid[1] - self.goal_centroid[1]))
+                
+                # Penalize distances that are too small (< 1.0)
+                    distance_penalty = 0
+                    if neighbor_distance < min_distance:
+                        distance_penalty = 10 * (min_distance - neighbor_distance)
+                
+                    adjusted_heuristic = self.block_heuristic(neighbor) + distance_penalty
+                    f_score = tentative_g + adjusted_heuristic
+            
+                # Add to open set
                     heapq.heappush(open_set, (f_score, tentative_g, neighbor))
-    
-        # If we exit the loop, either no path was found or time limit reached
+
+    # If we exit the loop, either no path was found or time limit reached
         if time.time() - start_time >= time_limit:
             print("Block movement phase timed out!")
-        
-        # Return the best state we found
+    
+    # Return the best state we found
         if came_from:
-            # Find state with minimum heuristic value
-            best_state = min(came_from.keys(), key=self.block_heuristic)
-            return self.reconstruct_path(came_from, best_state)
+        # Find state with appropriate distance to centroid
+            best_state = None
+            best_distance_diff = float('inf')
         
+            for state in came_from.keys():
+                state_centroid = self.calculate_centroid(state)
+                distance = (abs(state_centroid[0] - self.goal_centroid[0]) + 
+                            abs(state_centroid[1] - self.goal_centroid[1]))
+            
+            # We want a state that's as close as possible to our target distance range
+                if distance < min_distance:
+                    distance_diff = min_distance - distance
+                elif distance > max_distance:
+                    distance_diff = distance - max_distance
+                else:
+                # Distance is within our desired range
+                    best_state = state
+                    break
+                
+                if distance_diff < best_distance_diff:
+                    best_distance_diff = distance_diff
+                    best_state = state
+        
+            if best_state:
+                best_centroid = self.calculate_centroid(best_state)
+                best_distance = (abs(best_centroid[0] - self.goal_centroid[0]) + 
+                                abs(best_centroid[1] - self.goal_centroid[1]))
+                print(f"Best block position found with centroid distance: {best_distance}")
+                return self.reconstruct_path(came_from, best_state)
+    
         return [self.start_state]  # No movement possible
     
     def smarter_morphing_phase(self, start_state, time_limit=15):
