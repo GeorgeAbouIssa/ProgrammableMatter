@@ -39,15 +39,13 @@ class SearchController:
         
         self.selection_mode = False  # False = normal mode, True = goal selection mode
         self.custom_goal = []  # Store the custom goal positions
+        self.selection_active = False  # New flag to track if selection is currently active
         
         # Add a button to toggle selection mode
         self.select_button_ax = self.vis.fig.add_axes([0.4, 0.05, 0.2, 0.075])
         self.select_button = Button(self.select_button_ax, "Select Goal")
         self.select_button.on_clicked(self.toggle_selection_mode)
         
-        # Connect the mouse click event for grid selection
-        self.vis.fig.canvas.mpl_connect('button_press_event', self.on_grid_click)
-
         # Add label for grid size
         label_ax = self.vis.fig.add_axes([0.82, 0.75, 0.15, 0.05])
         label_ax.text(0.5, 0.5, 'Grid Size', ha='center', va='center')
@@ -82,9 +80,28 @@ class SearchController:
         # Set up button to start search
         self.vis.button.on_clicked(self.handle_button)
         
+        self.dragging = False
+        self.drag_start = None
+        self.drag_offset = None
+        
+        # For boundary checking
+        self.shape_min_x = 0
+        self.shape_max_x = 0
+        self.shape_min_y = 0
+        self.shape_max_y = 0
+        
+        # Add mouse events for dragging and selection
+        self.vis.fig.canvas.mpl_connect('button_press_event', self.on_mouse_press)
+        self.vis.fig.canvas.mpl_connect('button_release_event', self.on_mouse_release)
+        self.vis.fig.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
+
     def toggle_selection_mode(self, event):
         """Toggle between normal mode and goal selection mode"""
+        if self.dragging:  # Don't allow mode switch while dragging
+            return
+            
         self.selection_mode = not self.selection_mode
+        self.selection_active = self.selection_mode
         
         if self.selection_mode:
             # Entering selection mode
@@ -92,19 +109,18 @@ class SearchController:
             self.select_button.label.set_text("Confirm Goal")
             self.vis.update_text("Click on grid cells to define goal state", color="blue")
             
-            # Display the current positions as a starting point for goal selection
+            # Clear any highlighted goal shape
             self.vis.draw_grid(highlight_goal=False)
-            for pos in self.start_positions:
-                self.custom_goal.append(pos)
-                self.highlight_cell(pos, color='green')
         else:
-            # Exiting selection mode, confirm the goal
+            # Exiting selection mode
             if len(self.custom_goal) == len(self.start_positions):
-                # Valid goal state with the same number of blocks
-                self.goal_positions = self.custom_goal
-                # Update agent with new goal
+                self.goal_positions = self.custom_goal.copy()  # Make a copy of the custom goal
                 self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, self.goal_positions, self.topology)
                 self.select_button.label.set_text("Select Goal")
+                
+                # Update visualization with the new goal shape
+                self.vis.draw_grid()
+                self.vis.highlight_goal_shape(self.goal_positions)
                 self.vis.update_text(f"Custom goal set with {len(self.goal_positions)} blocks", color="green")
                 
                 # Reset search state
@@ -114,41 +130,34 @@ class SearchController:
                 self.vis.current_step = 0
                 self.vis.path = None
             else:
-                # Invalid goal state
+                self.selection_mode = True  # Stay in selection mode if invalid
                 self.select_button.label.set_text("Select Goal")
                 self.vis.update_text(f"Invalid goal: Need exactly {len(self.start_positions)} blocks", color="red")
-    
-    def on_grid_click(self, event):
+
+    def on_grid_click(self, event, x, y):
         """Handle grid cell clicks for goal selection"""
-        if not self.selection_mode or event.inaxes != self.vis.ax:
+        if not self.selection_mode or not self.selection_active:
             return
         
-        # Convert click coordinates to grid cell
-        x = int(event.ydata)  # Reversed for grid coordinates
-        y = int(event.xdata)
         pos = (x, y)
         
         if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
             if pos in self.custom_goal:
                 # Remove this position
                 self.custom_goal.remove(pos)
-                # Redraw without this cell
-                self.vis.draw_grid(highlight_goal=False)
-                for cell_pos in self.custom_goal:
-                    self.highlight_cell(cell_pos, color='green')
             else:
                 # Add this position if we haven't reached the limit
                 if len(self.custom_goal) < len(self.start_positions):
                     self.custom_goal.append(pos)
-                    self.highlight_cell(pos, color='green')
                 else:
-                    # Replace the first position (or use another strategy)
-                    old_pos = self.custom_goal.pop(0)
+                    # Replace the first position
+                    self.custom_goal.pop(0)
                     self.custom_goal.append(pos)
-                    # Redraw everything
-                    self.vis.draw_grid(highlight_goal=False)
-                    for cell_pos in self.custom_goal:
-                        self.highlight_cell(cell_pos, color='green')
+            
+            # Redraw the grid with current selection
+            self.vis.draw_grid(highlight_goal=False)
+            for cell_pos in self.custom_goal:
+                self.highlight_cell(cell_pos, color='green')
             
             # Update the counter
             self.vis.update_text(f"Selected {len(self.custom_goal)}/{len(self.start_positions)} blocks", color="blue")
@@ -166,6 +175,12 @@ class SearchController:
         
     def on_shape_selected(self, label):
         """Handle shape selection from radio buttons"""
+        # Cancel selection mode if active when changing shapes
+        if self.selection_mode:
+            self.selection_mode = False
+            self.selection_active = False
+            self.select_button.label.set_text("Select Goal")
+        
         self.current_shape = label
         self.goal_positions = self.formations[self.current_shape]
         
@@ -182,8 +197,9 @@ class SearchController:
         self.vis.current_step = 0
         self.vis.path = None
         
-        # Update visualization
+        # Update visualization with highlighted goal shape
         self.vis.draw_grid()
+        self.vis.highlight_goal_shape(self.goal_positions)
         self.vis.button.label.set_text("Search")
         self.vis.update_text(f"Selected {self.current_shape} shape", color="blue")
 
@@ -196,6 +212,8 @@ class SearchController:
 
     def run_search(self, event):
         """Runs the search when the Search button is clicked."""
+        # Clear goal shape highlight
+        self.vis.draw_grid()
         self.vis.update_text("Searching for a path...", color="red")
         plt.pause(1)  # Force update to show "Searching..." before search starts
         
@@ -258,6 +276,110 @@ class SearchController:
         except ValueError:
             self.vis.update_text("Invalid grid size. Enter a number between 10-200", color="red")
 
+    def on_mouse_press(self, event):
+        """Handle mouse press events for dragging and selection"""
+        if event.inaxes != self.vis.ax:
+            return
+            
+        # Convert click coordinates to grid cell
+        x, y = int(event.ydata), int(event.xdata)
+        
+        # Handle selection mode separately from dragging
+        if self.selection_mode and self.selection_active:
+            self.on_grid_click(event, x, y)
+            return
+        
+        # Only allow dragging when not in selection mode
+        click_pos = (x, y)
+        
+        # Check if click is within the goal shape
+        if any(abs(gx - x) < 1 and abs(gy - y) < 1 for gx, gy in self.goal_positions):
+            self.dragging = True
+            self.drag_start = click_pos
+            self.drag_offset = []
+            
+            # Calculate offsets for all points relative to click position
+            for gx, gy in self.goal_positions:
+                self.drag_offset.append((gx - x, gy - y))
+            
+            # Calculate shape boundaries for edge checking
+            x_coords = [pos[0] for pos in self.goal_positions]
+            y_coords = [pos[1] for pos in self.goal_positions]
+            self.shape_min_x = min(x_coords)
+            self.shape_max_x = max(x_coords)
+            self.shape_min_y = min(y_coords)
+            self.shape_max_y = max(y_coords)
+            
+            # Calculate shape dimensions
+            shape_width = self.shape_max_x - self.shape_min_x
+            shape_height = self.shape_max_y - self.shape_min_y
+            
+            # Calculate distance from click to shape bounds
+            self.bound_left = x - self.shape_min_x
+            self.bound_right = self.shape_max_x - x
+            self.bound_top = y - self.shape_min_y
+            self.bound_bottom = self.shape_max_y - y
+    
+    def on_mouse_release(self, event):
+        """Handle mouse release events for dragging"""
+        if self.dragging and not self.selection_mode:
+            self.dragging = False
+            if event.inaxes == self.vis.ax:
+                # Snap to grid
+                x, y = int(event.ydata), int(event.xdata)
+                # Apply boundary constraints
+                x, y = self.constrain_to_boundaries(x, y)
+                
+                new_positions = []
+                for offset_x, offset_y in self.drag_offset:
+                    new_x = x + offset_x
+                    new_y = y + offset_y
+                    if 0 <= new_x < self.grid_size[0] and 0 <= new_y < self.grid_size[1]:
+                        new_positions.append((new_x, new_y))
+                
+                if len(new_positions) == len(self.goal_positions):
+                    self.goal_positions = new_positions
+                    self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, 
+                                                    self.goal_positions, self.topology)
+                    self.search_completed = False
+                    self.vis.draw_grid()
+                    self.vis.highlight_goal_shape(self.goal_positions)
+                    self.vis.update_text("Goal shape moved", color="blue")
+    
+    def constrain_to_boundaries(self, x, y):
+        """Constrain the drag point to keep the shape within grid boundaries"""
+        # Constrain x-coordinate
+        min_x = self.bound_left  # Minimum allowed x (to keep left edge in bounds)
+        max_x = self.grid_size[0] - 1 - self.bound_right  # Maximum allowed x (to keep right edge in bounds)
+        x = max(min_x, min(x, max_x))
+        
+        # Constrain y-coordinate
+        min_y = self.bound_top  # Minimum allowed y (to keep top edge in bounds)
+        max_y = self.grid_size[1] - 1 - self.bound_bottom  # Maximum allowed y (to keep bottom edge in bounds)
+        y = max(min_y, min(y, max_y))
+        
+        return x, y
+    
+    def on_mouse_move(self, event):
+        """Handle mouse movement events for dragging"""
+        if self.dragging and not self.selection_mode and event.inaxes == self.vis.ax:
+            # Get cursor position with boundary constraints
+            x, y = event.ydata, event.xdata
+            x, y = self.constrain_to_boundaries(x, y)
+            
+            # Clear and redraw the grid
+            self.vis.draw_grid()
+            
+            # Draw the shape at the new position
+            temp_positions = []
+            for offset_x, offset_y in self.drag_offset:
+                new_x = x + offset_x
+                new_y = y + offset_y
+                temp_positions.append((new_x, new_y))
+            
+            # Highlight the shape at its temporary position
+            self.vis.highlight_goal_shape(temp_positions)
+
 # Example usage
 if __name__ == "__main__":
     grid_size = (10, 10)
@@ -267,18 +389,6 @@ if __name__ == "__main__":
     formations = {
         "start": [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
                   (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9)],
-        
-        # "start": [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
-        #           (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9), 
-        #           (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (2, 9),
-        #           (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7), (3, 8), (3, 9),
-        #           (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 8), (4, 9)],
-        
-        # "Ring": [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
-        #           (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9), 
-        #           (2, 0), (2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (2, 9),
-        #           (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7), (3, 8), (3, 9),
-        #           (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5), (4, 6), (4, 7), (4, 8), (4, 9)],
         
         "Ring": [(7, 4), (7, 5), (6, 3), (6, 4), (6, 5), (6, 6), (5, 2), (5, 3), (5, 6), (5, 7),
                  (4, 2), (4, 3), (4, 6), (4, 7), (3, 3), (3, 4), (3, 5), (3, 6), (2, 4), (2, 5)],

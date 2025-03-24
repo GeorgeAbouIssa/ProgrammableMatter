@@ -32,7 +32,7 @@ class Visualizer:
         self.ax.clear()
         self.ax.set_xticks(np.arange(self.grid_size[1] + 1), minor=False)
         self.ax.set_yticks(np.arange(self.grid_size[0] + 1), minor=False)
-        self.ax.grid(which="major", color="black", linestyle='-', linewidth=1)
+        self.ax.grid(which="major", color="black", linestyle='-', linewidth=0.5)
         self.ax.tick_params(which="both", bottom=False, left=False, labelbottom=False, labelleft=False)
         self.ax.set_aspect('equal')
         self.ax.set_xlim(0, self.grid_size[1])
@@ -99,7 +99,7 @@ class Visualizer:
             self.ax.clear()  # Clear the grid
             self.ax.set_xticks(np.arange(self.grid_size[1] + 1), minor=False)
             self.ax.set_yticks(np.arange(self.grid_size[0] + 1), minor=False)
-            self.ax.grid(which="major", color="black", linestyle='-', linewidth=1)
+            self.ax.grid(which="major", color="black", linestyle='-', linewidth=0.5)
             self.ax.tick_params(which="both", bottom=False, left=False, labelbottom=False, labelleft=False)
             self.ax.set_aspect('equal')
             self.ax.set_xlim(0, self.grid_size[1])
@@ -133,4 +133,16 @@ class Visualizer:
             self.button.label.set_text("Restart")
             self.update_text("Start another search.", color="green")
 
+        plt.draw()
+
+    def highlight_goal_shape(self, goal_positions):
+        """Highlight the goal shape with a dim green color"""
+        for pos in goal_positions:
+            x, y = pos
+            # Convert floating point positions to grid coordinates for display
+            if isinstance(x, float) and isinstance(y, float):
+                rect = plt.Rectangle((y - 0.5, x - 0.5), 1, 1, color='green', alpha=0.3)
+            else:
+                rect = plt.Rectangle((y, x), 1, 1, color='green', alpha=0.3)
+            self.ax.add_patch(rect)
         plt.draw()
