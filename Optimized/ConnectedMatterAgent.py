@@ -1,9 +1,7 @@
 import heapq
 import time
 import matplotlib.pyplot as plt
-import numpy as np
 from collections import deque
-import copy
 
 class ConnectedMatterAgent:
     def __init__(self, grid_size, start_positions, goal_positions, topology="moore"):

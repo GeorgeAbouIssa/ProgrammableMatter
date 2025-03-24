@@ -1,7 +1,6 @@
 import sys
 import matplotlib.pyplot as plt
 import time
-import numpy as np
 from matplotlib.widgets import Button, RadioButtons, TextBox
 from ConnectedMatterAgent import ConnectedMatterAgent
 from Visualizer import Visualizer
@@ -383,7 +382,6 @@ class SearchController:
 # Example usage
 if __name__ == "__main__":
     grid_size = (10, 10)
-    # grid_size = (50, 50) # 50x50 grid
     
     # Dictionary of formations
     formations = {
