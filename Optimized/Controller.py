@@ -542,7 +542,14 @@ if __name__ == "__main__":
                      (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 4), (4, 5), (4, 6), (5, 4), (5, 5)]
     }
     
-    controller = SearchController(grid_size, formations, "moore", 1000)
+    controller = SearchController(
+        grid_size=grid_size, 
+        formations=formations, 
+        topology="moore", 
+        time_limit=1000,
+        max_simultaneous_moves=1,  # Default value, can be changed via UI
+        min_simultaneous_moves=1   # Default value, can be changed via UI
+    )
 
     plt.ioff()  # Disable interactive mode
     plt.show()  # Keep window open until manually closed
