@@ -6,7 +6,7 @@ from ConnectedMatterAgent import ConnectedMatterAgent
 from Visualizer import Visualizer
 
 class SearchController:
-    def __init__(self, grid_size, formations, topology="moore", time_limit=1000):
+    def __init__(self, grid_size, formations, topology="moore", time_limit=1000, max_simultaneous_moves=1, min_simultaneous_moves=1):
         self.grid_size = grid_size
         self.formations = formations  # Dictionary of shape names and their goal positions
         self.start_positions = formations["start"]
@@ -14,13 +14,16 @@ class SearchController:
         self.goal_positions = formations["Ring"]
         self.topology = topology
         self.time_limit = time_limit
+        self.max_simultaneous_moves = max_simultaneous_moves
+        self.min_simultaneous_moves = min(min_simultaneous_moves, max_simultaneous_moves)
         self.search_completed = False
 
         # Enable interactive mode so the grid appears first
         plt.ion()  
 
-        # Create visualizer and show the grid first
-        self.vis = Visualizer(grid_size, [], self.start_positions)
+        # Create visualizer with default animation speed
+        self.animation_speed = 0.05  # Default animation speed (seconds)
+        self.vis = Visualizer(grid_size, [], self.start_positions, self.animation_speed)
         self.vis.draw_grid()
         plt.show(block=False)  # Show grid before printing anything
 
@@ -64,6 +67,50 @@ class SearchController:
         self.grid_button = Button(self.grid_button_ax, "Apply")
         self.grid_button.on_clicked(self.change_grid_size)
 
+        # Add a label for max simultaneous moves
+        sim_moves_label_ax = self.vis.fig.add_axes([0.82, 0.55, 0.15, 0.05])
+        sim_moves_label_ax.text(0.5, 0.5, 'Max Simultaneous Moves', ha='center', va='center')
+        sim_moves_label_ax.axis('off')
+        
+        # Add slider for max simultaneous moves
+        self.sim_moves_slider_ax = self.vis.fig.add_axes([0.84, 0.5, 0.1, 0.03])
+        self.sim_moves_slider = plt.Slider(
+            self.sim_moves_slider_ax, '',
+            1, 5, valinit=self.max_simultaneous_moves, valstep=1
+        )
+        self.sim_moves_slider.on_changed(self.update_max_simultaneous_moves)
+        
+        # Add a label for min simultaneous moves
+        min_moves_label_ax = self.vis.fig.add_axes([0.82, 0.45, 0.15, 0.05])
+        min_moves_label_ax.text(0.5, 0.5, 'Min Simultaneous Moves', ha='center', va='center')
+        min_moves_label_ax.axis('off')
+        
+        # Add slider for min simultaneous moves
+        self.min_moves_slider_ax = self.vis.fig.add_axes([0.84, 0.4, 0.1, 0.03])
+        self.min_moves_slider = plt.Slider(
+            self.min_moves_slider_ax, '',
+            1, 5, valinit=self.min_simultaneous_moves, valstep=1
+        )
+        self.min_moves_slider.on_changed(self.update_min_simultaneous_moves)
+
+        # Add a label for animation speed
+        anim_speed_label_ax = self.vis.fig.add_axes([0.82, 0.35, 0.15, 0.05])
+        anim_speed_label_ax.text(0.5, 0.5, 'Animation Speed', ha='center', va='center')
+        anim_speed_label_ax.axis('off')
+        
+        # Add slider for animation speed (in seconds)
+        self.anim_speed_slider_ax = self.vis.fig.add_axes([0.84, 0.3, 0.1, 0.03])
+        self.anim_speed_slider = plt.Slider(
+            self.anim_speed_slider_ax, '',
+            0.01, 1.0, valinit=self.animation_speed, valfmt='%.2f'
+        )
+        self.anim_speed_slider.on_changed(self.update_animation_speed)
+        
+        # Add a label to explain animation speed
+        anim_speed_info_ax = self.vis.fig.add_axes([0.82, 0.25, 0.15, 0.05])
+        anim_speed_info_ax.text(0.5, 0.5, 'Seconds per step', ha='center', va='center', fontsize=8)
+        anim_speed_info_ax.axis('off')
+
         # Print initialization info
         print(f"Initializing Connected Programmable Matter Agent...")
         print(f"Grid size: {grid_size}")
@@ -74,7 +121,14 @@ class SearchController:
         print(f"Constraint: All elements must remain connected during movement")
 
         # Initialize the agent
-        self.agent = ConnectedMatterAgent(grid_size, self.start_positions, self.goal_positions, topology)
+        self.agent = ConnectedMatterAgent(
+            grid_size, 
+            self.start_positions, 
+            self.goal_positions, 
+            topology,
+            max_simultaneous_moves=self.max_simultaneous_moves,
+            min_simultaneous_moves=self.min_simultaneous_moves
+        )
         
         # Set up button to start search
         self.vis.button.on_clicked(self.handle_button)
@@ -114,7 +168,14 @@ class SearchController:
             # Exiting selection mode
             if len(self.custom_goal) == len(self.start_positions):
                 self.goal_positions = self.custom_goal.copy()  # Make a copy of the custom goal
-                self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, self.goal_positions, self.topology)
+                self.agent = ConnectedMatterAgent(
+                    self.grid_size, 
+                    self.start_positions, 
+                    self.goal_positions, 
+                    self.topology,
+                    max_simultaneous_moves=self.max_simultaneous_moves,
+                    min_simultaneous_moves=self.min_simultaneous_moves
+                )
                 self.select_button.label.set_text("Select Goal")
                 
                 # Update visualization with the new goal shape
@@ -184,7 +245,14 @@ class SearchController:
         self.goal_positions = self.formations[self.current_shape]
         
         # Update agent with new goal positions
-        self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, self.goal_positions, self.topology)
+        self.agent = ConnectedMatterAgent(
+            self.grid_size, 
+            self.start_positions, 
+            self.goal_positions, 
+            self.topology,
+            max_simultaneous_moves=self.max_simultaneous_moves,
+            min_simultaneous_moves=self.min_simultaneous_moves
+        )
         
         print(f"Selected shape: {self.current_shape}")
         print(f"Goal positions: {self.goal_positions}")
@@ -226,6 +294,7 @@ class SearchController:
         if path:
             print(f"Path found with {len(path)-1} moves in {search_time:.2f} seconds")
             print(f"Ready for visualization...")
+            self.vis.animation_speed = self.animation_speed  # Ensure animation speed is updated
             self.vis.path = path  # Update path in visualizer
             self.vis.button.label.set_text("Start")  # Set button text to Start
             self.vis.update_text(f"Path found ({len(path)-1} moves)", color="green")
@@ -235,6 +304,68 @@ class SearchController:
             self.vis.button.label.set_text("Search")  # Reset button text
             self.vis.update_text("No paths found", color="red")
             plt.draw()
+
+    def update_max_simultaneous_moves(self, val):
+        """Update the maximum number of simultaneous moves"""
+        self.max_simultaneous_moves = int(val)
+        
+        # Ensure min doesn't exceed max
+        if self.min_simultaneous_moves > self.max_simultaneous_moves:
+            self.min_simultaneous_moves = self.max_simultaneous_moves
+            self.min_moves_slider.set_val(self.min_simultaneous_moves)
+            
+        self.vis.update_text(f"Simultaneous moves: {self.min_simultaneous_moves}-{self.max_simultaneous_moves}", color="blue")
+        
+        # Update agent with new parameter
+        self.agent = ConnectedMatterAgent(
+            self.grid_size, 
+            self.start_positions, 
+            self.goal_positions, 
+            self.topology,
+            max_simultaneous_moves=self.max_simultaneous_moves,
+            min_simultaneous_moves=self.min_simultaneous_moves
+        )
+        
+        # Reset search state
+        self.search_completed = False
+        self.vis.animation_started = False
+        self.vis.animation_done = False
+        self.vis.current_step = 0
+        self.vis.path = None
+    
+    def update_min_simultaneous_moves(self, val):
+        """Update the minimum number of simultaneous moves"""
+        self.min_simultaneous_moves = int(val)
+        
+        # Ensure min doesn't exceed max
+        if self.min_simultaneous_moves > self.max_simultaneous_moves:
+            self.max_simultaneous_moves = self.min_simultaneous_moves
+            self.sim_moves_slider.set_val(self.max_simultaneous_moves)
+            
+        self.vis.update_text(f"Simultaneous moves: {self.min_simultaneous_moves}-{self.max_simultaneous_moves}", color="blue")
+        
+        # Update agent with new parameter
+        self.agent = ConnectedMatterAgent(
+            self.grid_size, 
+            self.start_positions, 
+            self.goal_positions, 
+            self.topology,
+            max_simultaneous_moves=self.max_simultaneous_moves,
+            min_simultaneous_moves=self.min_simultaneous_moves
+        )
+        
+        # Reset search state
+        self.search_completed = False
+        self.vis.animation_started = False
+        self.vis.animation_done = False
+        self.vis.current_step = 0
+        self.vis.path = None
+
+    def update_animation_speed(self, val):
+        """Update the animation speed (seconds between frames)"""
+        self.animation_speed = val
+        self.vis.set_animation_speed(val)
+        self.vis.update_text(f"Animation speed: {val:.2f} sec/step", color="blue")
 
     def on_text_submit(self, text):
         """Handle grid size text submission"""
@@ -258,7 +389,14 @@ class SearchController:
             self.grid_text_box.set_val(str(n))
             
             # Reinitialize agent with new grid size
-            self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, self.goal_positions, self.topology)
+            self.agent = ConnectedMatterAgent(
+                self.grid_size, 
+                self.start_positions, 
+                self.goal_positions, 
+                self.topology,
+                max_simultaneous_moves=self.max_simultaneous_moves,
+                min_simultaneous_moves=self.min_simultaneous_moves
+            )
             
             # Update visualization
             self.vis.grid_size = self.grid_size
@@ -338,8 +476,14 @@ class SearchController:
                 
                 if len(new_positions) == len(self.goal_positions):
                     self.goal_positions = new_positions
-                    self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, 
-                                                    self.goal_positions, self.topology)
+                    self.agent = ConnectedMatterAgent(
+                        self.grid_size, 
+                        self.start_positions, 
+                        self.goal_positions, 
+                        self.topology,
+                        max_simultaneous_moves=self.max_simultaneous_moves,
+                        min_simultaneous_moves=self.min_simultaneous_moves
+                    )
                     self.search_completed = False
                     self.vis.draw_grid()
                     self.vis.highlight_goal_shape(self.goal_positions)

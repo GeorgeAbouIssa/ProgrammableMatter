@@ -3,10 +3,11 @@ from matplotlib.widgets import Button
 import numpy as np
 
 class Visualizer:
-    def __init__(self, grid_size, path, start_positions):
+    def __init__(self, grid_size, path, start_positions, animation_speed=0.05):
         self.grid_size = grid_size
         self.path = path  # Ensure path is passed correctly
         self.start_positions = start_positions
+        self.animation_speed = animation_speed  # Time in seconds between animation steps
         self.paused = False  # Track pause state
         self.animation_done = False  # Track if animation is complete
         self.current_step = 0  # Keep track of the animation step
@@ -90,12 +91,12 @@ class Visualizer:
             self.update_text("No paths found", color="red")
             return
 
-    # Continue from the current step instead of restarting
+        # Continue from the current step instead of restarting
         while self.current_step < len(self.path):
             if self.paused:
                 return  # Stop animation if paused
 
-        # Draw the current step
+            # Draw the current step
             self.ax.clear()  # Clear the grid
             self.ax.set_xticks(np.arange(self.grid_size[1] + 1), minor=False)
             self.ax.set_yticks(np.arange(self.grid_size[0] + 1), minor=False)
@@ -105,29 +106,29 @@ class Visualizer:
             self.ax.set_xlim(0, self.grid_size[1])
             self.ax.set_ylim(0, self.grid_size[0])
         
-        # Restore text annotation
+            # Restore text annotation
             self.text_annotation = self.ax.text(
                 self.grid_size[1] / 2, self.grid_size[0] + 0.3, 
                 "Animating...", ha="center", fontsize=12, fontweight="bold"
             )
 
-        # Get current positions in the path
+            # Get current positions in the path
             positions = self.path[self.current_step]
         
-        # Check for overlaps
+            # Check for overlaps
             if len(set(positions)) < len(positions):
                 self.update_text("Warning: Node overlap detected!", color="red")
         
-        # Draw each position without labels
+            # Draw each position without labels
             for pos in positions:
                 x, y = pos
                 self.ax.add_patch(plt.Rectangle((y, x), 1, 1, color='grey'))
             # No more text labels
         
-            plt.pause(0.05)  # Slow down animation for visibility
+            plt.pause(self.animation_speed)  # Use customizable animation speed
             self.current_step += 1  # Move to the next step
 
-    # Animation completed
+        # Animation completed
         if self.current_step >= len(self.path):
             self.animation_done = True
             self.button.label.set_text("Restart")
@@ -146,3 +147,7 @@ class Visualizer:
                 rect = plt.Rectangle((y, x), 1, 1, color='green', alpha=0.3)
             self.ax.add_patch(rect)
         plt.draw()
+
+    def set_animation_speed(self, speed):
+        """Update the animation speed"""
+        self.animation_speed = speed

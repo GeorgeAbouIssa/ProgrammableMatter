@@ -4,11 +4,13 @@ import matplotlib.pyplot as plt
 from collections import deque
 
 class ConnectedMatterAgent:
-    def __init__(self, grid_size, start_positions, goal_positions, topology="moore"):
+    def __init__(self, grid_size, start_positions, goal_positions, topology="moore", max_simultaneous_moves=1, min_simultaneous_moves=1):
         self.grid_size = grid_size
         self.start_positions = list(start_positions)
         self.goal_positions = list(goal_positions)
         self.topology = topology
+        self.max_simultaneous_moves = max_simultaneous_moves
+        self.min_simultaneous_moves = min(min_simultaneous_moves, max_simultaneous_moves)  # Ensure min <= max
         
         # Set moves based on topology
         if self.topology == "moore":
@@ -162,13 +164,14 @@ class ConnectedMatterAgent:
     def get_valid_morphing_moves(self, state):
         """
         Generate valid morphing moves that maintain connectivity
-        Using a smarter approach that considers critical points
+        Supports multiple simultaneous block movements with minimum requirement
         """
         state_key = hash(state)
         if state_key in self.valid_moves_cache:
             return self.valid_moves_cache[state_key]
             
-        valid_moves = []
+        # Get single block moves first
+        single_moves = []
         state_set = set(state)
         
         # Find non-critical points that can move without breaking connectivity
@@ -183,8 +186,8 @@ class ConnectedMatterAgent:
                 temp_state.remove(point)
                 if self.is_connected(temp_state):
                     movable_points.add(point)
-            
-        # For each movable point, find valid moves
+        
+        # Generate single block moves
         for point in movable_points:
             # Try moving in each direction
             for dx, dy in self.directions:
@@ -214,11 +217,69 @@ class ConnectedMatterAgent:
                 
                 # Only consider moves that maintain connectivity
                 if has_adjacent and self.is_connected(new_state_set):
-                    valid_moves.append(frozenset(new_state_set))
+                    single_moves.append((point, new_pos))
+                    
+        # Start with empty valid moves list
+        valid_moves = []
+        
+        # Generate multi-block moves
+        for k in range(self.min_simultaneous_moves, min(self.max_simultaneous_moves + 1, len(single_moves) + 1)):
+            # Generate combinations of k moves
+            for combo in self._generate_move_combinations(single_moves, k):
+                # Check if the combination is valid (no conflicts)
+                if self._is_valid_move_combination(combo, state_set):
+                    # Apply the combination and check connectivity
+                    new_state = self._apply_moves(state_set, combo)
+                    if self.is_connected(new_state):
+                        valid_moves.append(frozenset(new_state))
+        
+        # If no valid moves with min_simultaneous_moves, fallback to single moves if allowed
+        if not valid_moves and self.min_simultaneous_moves == 1:
+            valid_moves = [frozenset(self._apply_moves(state_set, [move])) for move in single_moves]
         
         # Cache results
         self.valid_moves_cache[state_key] = valid_moves
         return valid_moves
+    
+    def _generate_move_combinations(self, single_moves, k):
+        """Generate all combinations of k moves from the list of single moves"""
+        if k == 1:
+            return [[move] for move in single_moves]
+        
+        result = []
+        for i in range(len(single_moves) - k + 1):
+            move = single_moves[i]
+            for combo in self._generate_move_combinations(single_moves[i+1:], k-1):
+                result.append([move] + combo)
+        
+        return result
+    
+    def _is_valid_move_combination(self, moves, state_set):
+        """Check if a combination of moves is valid (no conflicts)"""
+        # Extract source and target positions
+        sources = set()
+        targets = set()
+        
+        for src, tgt in moves:
+            # Check for overlapping sources or targets
+            if src in sources or tgt in targets:
+                return False
+            sources.add(src)
+            targets.add(tgt)
+            
+            # Check that no target is also a source for another move
+            if tgt in sources or src in targets:
+                return False
+        
+        return True
+    
+    def _apply_moves(self, state_set, moves):
+        """Apply a list of moves to the state"""
+        new_state = state_set.copy()
+        for src, tgt in moves:
+            new_state.remove(src)
+            new_state.add(tgt)
+        return new_state
     
     def get_smart_chain_moves(self, state):
         """
@@ -542,9 +603,9 @@ class ConnectedMatterAgent:
     def smarter_morphing_phase(self, start_state, time_limit=15):
         """
         Improved Phase 2: Morph the block into the goal shape while maintaining connectivity
-        Uses beam search and intelligent move generation
+        Uses beam search and intelligent move generation with support for simultaneous moves
         """
-        print("Starting Smarter Morphing Phase...")
+        print(f"Starting Smarter Morphing Phase with {self.min_simultaneous_moves}-{self.max_simultaneous_moves} simultaneous moves...")
         start_time = time.time()
         
         # Initialize beam search
