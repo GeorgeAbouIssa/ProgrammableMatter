@@ -64,6 +64,18 @@ class SearchController:
         self.grid_button = Button(self.grid_button_ax, "Apply")
         self.grid_button.on_clicked(self.change_grid_size)
 
+        self.obstacles = set()  # Store obstacle positions
+        self.obstacle_mode = False  # Track if obstacle placement mode is active
+        
+        # Add obstacle controls (left side)
+        self.obstacle_button_ax = self.vis.fig.add_axes([0.05, 0.25, 0.15, 0.075])
+        self.obstacle_button = Button(self.obstacle_button_ax, "Place Obstacles")
+        self.obstacle_button.on_clicked(self.toggle_obstacle_mode)
+        
+        self.reset_obstacles_ax = self.vis.fig.add_axes([0.05, 0.35, 0.15, 0.075])
+        self.reset_obstacles_button = Button(self.reset_obstacles_ax, "Clear Obstacles")
+        self.reset_obstacles_button.on_clicked(self.reset_obstacles)
+
         # Print initialization info
         print(f"Initializing Connected Programmable Matter Agent...")
         print(f"Grid size: {grid_size}")
@@ -140,7 +152,13 @@ class SearchController:
         
         pos = (x, y)
         
+        # Check if position is valid (within bounds and not an obstacle)
         if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
+            # Don't allow selection of obstacle positions
+            if pos in self.obstacles:
+                self.vis.update_text("Cannot place goal on obstacles", color="red")
+                return
+                
             if pos in self.custom_goal:
                 # Remove this position
                 self.custom_goal.remove(pos)
@@ -183,8 +201,9 @@ class SearchController:
         self.current_shape = label
         self.goal_positions = self.formations[self.current_shape]
         
-        # Update agent with new goal positions
+        # Update agent with new goal positions and existing obstacles
         self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, self.goal_positions, self.topology)
+        self.agent.set_obstacles(self.obstacles)  # Maintain obstacles
         
         print(f"Selected shape: {self.current_shape}")
         print(f"Goal positions: {self.goal_positions}")
@@ -196,7 +215,7 @@ class SearchController:
         self.vis.current_step = 0
         self.vis.path = None
         
-        # Update visualization with highlighted goal shape
+        # Update visualization with highlighted goal shape and obstacles
         self.vis.draw_grid()
         self.vis.highlight_goal_shape(self.goal_positions)
         self.vis.button.label.set_text("Search")
@@ -211,8 +230,10 @@ class SearchController:
 
     def run_search(self, event):
         """Runs the search when the Search button is clicked."""
-        # Clear goal shape highlight
+        # Clear goal shape highlight but maintain obstacles
         self.vis.draw_grid()
+        if self.obstacles:  # Redraw obstacles
+            self.vis.draw_obstacles(self.obstacles)
         self.vis.update_text("Searching for a path...", color="red")
         plt.pause(1)  # Force update to show "Searching..." before search starts
         
@@ -263,6 +284,8 @@ class SearchController:
             # Update visualization
             self.vis.grid_size = self.grid_size
             self.vis.draw_grid()
+            if self.obstacles:  # Maintain obstacles when changing grid size
+                self.vis.draw_obstacles(self.obstacles)
             self.vis.update_text(f"Grid size updated to {n}x{n}", color="green")
             
             # Reset search state
@@ -275,14 +298,56 @@ class SearchController:
         except ValueError:
             self.vis.update_text("Invalid grid size. Enter a number between 10-200", color="red")
 
+    def toggle_obstacle_mode(self, event):
+        """Toggle obstacle placement mode"""
+        if self.selection_mode or self.dragging:  # Don't allow while in other modes
+            return
+            
+        self.obstacle_mode = not self.obstacle_mode
+        if self.obstacle_mode:
+            self.obstacle_button.label.set_text("Confirm Obstacles")
+            self.vis.update_text("Click to place/remove obstacles", color="orange")
+        else:
+            self.obstacle_button.label.set_text("Place Obstacles")
+            self.vis.update_text("Obstacles confirmed", color="green")
+            # Update both agent and visualizer with obstacles
+            self.agent.set_obstacles(self.obstacles)
+            self.vis.set_obstacles(self.obstacles)  # New method to update visualizer
+
+    def reset_obstacles(self, event):
+        """Clear all obstacles"""
+        self.obstacles.clear()
+        self.obstacle_mode = False
+        self.obstacle_button.label.set_text("Place Obstacles")
+        self.agent.set_obstacles(self.obstacles)
+        self.vis.set_obstacles(self.obstacles)  # Update visualizer
+        self.vis.draw_grid()
+        self.vis.update_text("Obstacles cleared", color="blue")
+
     def on_mouse_press(self, event):
-        """Handle mouse press events for dragging and selection"""
+        """Handle mouse press events for dragging, selection, and obstacles"""
         if event.inaxes != self.vis.ax:
             return
             
         # Convert click coordinates to grid cell
         x, y = int(event.ydata), int(event.xdata)
         
+        # Handle obstacle placement mode
+        if self.obstacle_mode:
+            pos = (x, y)
+            # Don't allow obstacles on start positions or goal positions
+            if pos in self.start_positions or pos in self.goal_positions:
+                return
+            
+            if pos in self.obstacles:
+                self.obstacles.remove(pos)
+            else:
+                self.obstacles.add(pos)
+            self.vis.draw_grid()
+            self.vis.highlight_goal_shape(self.goal_positions)
+            self.vis.draw_obstacles(self.obstacles)
+            return
+            
         # Handle selection mode separately from dragging
         if self.selection_mode and self.selection_active:
             self.on_grid_click(event, x, y)
@@ -329,6 +394,7 @@ class SearchController:
                 # Apply boundary constraints
                 x, y = self.constrain_to_boundaries(x, y)
                 
+                # Calculate new positions
                 new_positions = []
                 for offset_x, offset_y in self.drag_offset:
                     new_x = x + offset_x
@@ -336,15 +402,24 @@ class SearchController:
                     if 0 <= new_x < self.grid_size[0] and 0 <= new_y < self.grid_size[1]:
                         new_positions.append((new_x, new_y))
                 
-                if len(new_positions) == len(self.goal_positions):
+                # Check for obstacle collisions before finalizing
+                if len(new_positions) == len(self.goal_positions) and not self.check_goal_obstacle_collision(new_positions):
                     self.goal_positions = new_positions
                     self.agent = ConnectedMatterAgent(self.grid_size, self.start_positions, 
                                                     self.goal_positions, self.topology)
+                    self.agent.set_obstacles(self.obstacles)  # Update agent with obstacles
                     self.search_completed = False
                     self.vis.draw_grid()
                     self.vis.highlight_goal_shape(self.goal_positions)
+                    self.vis.draw_obstacles(self.obstacles)  # Redraw obstacles
                     self.vis.update_text("Goal shape moved", color="blue")
-    
+                else:
+                    # If invalid position, revert to original position
+                    self.vis.draw_grid()
+                    self.vis.highlight_goal_shape(self.goal_positions)
+                    self.vis.draw_obstacles(self.obstacles)
+                    self.vis.update_text("Invalid position - overlapping with obstacles", color="red")
+
     def constrain_to_boundaries(self, x, y):
         """Constrain the drag point to keep the shape within grid boundaries"""
         # Constrain x-coordinate
@@ -366,18 +441,28 @@ class SearchController:
             x, y = event.ydata, event.xdata
             x, y = self.constrain_to_boundaries(x, y)
             
-            # Clear and redraw the grid
-            self.vis.draw_grid()
-            
-            # Draw the shape at the new position
+            # Calculate new positions
             temp_positions = []
             for offset_x, offset_y in self.drag_offset:
                 new_x = x + offset_x
                 new_y = y + offset_y
                 temp_positions.append((new_x, new_y))
             
+            # Check for obstacle collisions
+            if self.check_goal_obstacle_collision(temp_positions):
+                return  # Skip updating if there's a collision
+            
+            # Clear and redraw the grid with obstacles
+            self.vis.draw_grid()
+            if self.obstacles:
+                self.vis.draw_obstacles(self.obstacles)
+            
             # Highlight the shape at its temporary position
             self.vis.highlight_goal_shape(temp_positions)
+
+    def check_goal_obstacle_collision(self, positions):
+        """Check if any goal position overlaps with obstacles"""
+        return any(pos in self.obstacles for pos in positions)
 
 # Example usage
 if __name__ == "__main__":

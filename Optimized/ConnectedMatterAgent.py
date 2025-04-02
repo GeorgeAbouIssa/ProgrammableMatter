@@ -9,6 +9,7 @@ class ConnectedMatterAgent:
         self.start_positions = list(start_positions)
         self.goal_positions = list(goal_positions)
         self.topology = topology
+        self.obstacles = set()  # Store obstacle positions
         
         # Set moves based on topology
         if self.topology == "moore":
@@ -35,6 +36,13 @@ class ConnectedMatterAgent:
         self.beam_width = 500  # Increased beam width for better exploration
         self.max_iterations = 10000  # Limit iterations to prevent infinite loops
         
+    def set_obstacles(self, obstacles):
+        """Update the obstacle set"""
+        self.obstacles = set(obstacles)
+        # Clear caches since valid moves may change
+        self.valid_moves_cache.clear()
+        self.connectivity_check_cache.clear()
+
     def calculate_centroid(self, positions):
         """Calculate the centroid (average position) of a set of positions"""
         if not positions:
@@ -148,11 +156,12 @@ class ConnectedMatterAgent:
             # Calculate new positions after moving
             new_positions = [(pos[0] + dx, pos[1] + dy) for pos in state_list]
             
-            # Check if all new positions are valid (within bounds and not occupied)
+            # Check if all new positions are valid (within bounds and not occupied by obstacles)
             all_valid = all(0 <= pos[0] < self.grid_size[0] and 
-                            0 <= pos[1] < self.grid_size[1] for pos in new_positions)
+                            0 <= pos[1] < self.grid_size[1] and
+                            pos not in self.obstacles for pos in new_positions)
             
-            # Only consider moves that keep all positions within bounds
+            # Only consider moves that keep all positions within bounds and away from obstacles
             if all_valid:
                 new_state = frozenset(new_positions)
                 valid_moves.append(new_state)
@@ -190,9 +199,9 @@ class ConnectedMatterAgent:
             for dx, dy in self.directions:
                 new_pos = (point[0] + dx, point[1] + dy)
                 
-                # Skip if out of bounds
+                # Skip if out of bounds or occupied by obstacle
                 if not (0 <= new_pos[0] < self.grid_size[0] and 
-                        0 <= new_pos[1] < self.grid_size[1]):
+                        0 <= new_pos[1] < self.grid_size[1]) or new_pos in self.obstacles:
                     continue
                 
                 # Skip if already occupied

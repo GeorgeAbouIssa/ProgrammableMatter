@@ -11,6 +11,7 @@ class Visualizer:
         self.animation_done = False  # Track if animation is complete
         self.current_step = 0  # Keep track of the animation step
         self.animation_started = False  # Track if animation has started
+        self.obstacles = set()  # Store obstacles locally in visualizer
 
         self.fig, self.ax = plt.subplots(figsize=(12, 10))  # Larger figure
         self.fig.subplots_adjust(left=0.2, right=0.8, bottom=0.2, top=0.95)  # Moved up by adjusting top margin
@@ -27,12 +28,18 @@ class Visualizer:
 
         self.draw_grid()  # Ensure the grid is drawn initially
 
+    def set_obstacles(self, obstacles):
+        """Update the stored obstacles"""
+        self.obstacles = set(obstacles)
+        self.draw_grid()
+        self.draw_obstacles(self.obstacles)
+
     def draw_grid(self, highlight_initial=True, highlight_goal=False):
         """Draws the grid and optionally highlights positions."""
         self.ax.clear()
         self.ax.set_xticks(np.arange(self.grid_size[1] + 1), minor=False)
         self.ax.set_yticks(np.arange(self.grid_size[0] + 1), minor=False)
-        self.ax.grid(which="major", color="black", linestyle='-', linewidth=0.5)
+        self.ax.grid(which="major", color="black", linestyle='-', linewidth=0.3)
         self.ax.tick_params(which="both", bottom=False, left=False, labelbottom=False, labelleft=False)
         self.ax.set_aspect('equal')
         self.ax.set_xlim(0, self.grid_size[1])
@@ -46,8 +53,17 @@ class Visualizer:
             self.grid_size[1] / 2, self.grid_size[0] + 0.3, 
             self.text_annotation.get_text(), ha="center", fontsize=12, fontweight="bold"
         )
+        # Always redraw obstacles if they exist
+        if self.obstacles:
+            self.draw_obstacles(self.obstacles)
         plt.draw()
         
+    def draw_obstacles(self, obstacles):
+        """Draw obstacles on the grid"""
+        for x, y in obstacles:
+            self.ax.add_patch(plt.Rectangle((y, x), 1, 1, color='red', alpha=0.5))
+        plt.draw()
+
     def update_text(self, message, color="black"):
         """Updates the status message above the grid dynamically with color."""
         self.text_annotation.set_text(message)
@@ -124,6 +140,10 @@ class Visualizer:
                 self.ax.add_patch(plt.Rectangle((y, x), 1, 1, color='grey'))
             # No more text labels
         
+            # Always redraw obstacles
+            if self.obstacles:
+                self.draw_obstacles(self.obstacles)
+
             plt.pause(0.05)  # Slow down animation for visibility
             self.current_step += 1  # Move to the next step
 
