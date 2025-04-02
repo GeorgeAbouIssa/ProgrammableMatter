@@ -67,39 +67,66 @@ class SearchController:
         self.grid_button = Button(self.grid_button_ax, "Apply")
         self.grid_button.on_clicked(self.change_grid_size)
 
-        # Add a label for max simultaneous moves
-        sim_moves_label_ax = self.vis.fig.add_axes([0.82, 0.55, 0.15, 0.05])
-        sim_moves_label_ax.text(0.5, 0.5, 'Max Simultaneous Moves', ha='center', va='center')
+        # ==================== MAX SIMULTANEOUS MOVES CONTROL ====================
+        # Add background panel for max simultaneous moves
+        self.max_moves_panel_ax = self.vis.fig.add_axes([0.81, 0.49, 0.17, 0.1])
+        self.max_moves_panel_ax.patch.set_facecolor('lightgray')
+        self.max_moves_panel_ax.patch.set_alpha(0.3)
+        self.max_moves_panel_ax.axis('off')
+        
+        # Add label for max simultaneous moves - larger, bolder font
+        sim_moves_label_ax = self.vis.fig.add_axes([0.82, 0.55, 0.15, 0.03])
+        sim_moves_label_ax.text(0.5, 0.5, 'MAX Simultaneous Moves', 
+                               ha='center', va='center', 
+                               fontweight='bold', fontsize=9)
         sim_moves_label_ax.axis('off')
         
         # Add slider for max simultaneous moves
-        self.sim_moves_slider_ax = self.vis.fig.add_axes([0.84, 0.5, 0.1, 0.03])
+        self.sim_moves_slider_ax = self.vis.fig.add_axes([0.84, 0.51, 0.1, 0.03])
         self.sim_moves_slider = plt.Slider(
             self.sim_moves_slider_ax, '',
             1, 5, valinit=self.max_simultaneous_moves, valstep=1
         )
         self.sim_moves_slider.on_changed(self.update_max_simultaneous_moves)
         
-        # Add a label for min simultaneous moves
-        min_moves_label_ax = self.vis.fig.add_axes([0.82, 0.45, 0.15, 0.05])
-        min_moves_label_ax.text(0.5, 0.5, 'Min Simultaneous Moves', ha='center', va='center')
+        # ==================== MIN SIMULTANEOUS MOVES CONTROL ====================
+        # Add background panel for min simultaneous moves
+        self.min_moves_panel_ax = self.vis.fig.add_axes([0.81, 0.36, 0.17, 0.1])
+        self.min_moves_panel_ax.patch.set_facecolor('lightgray')
+        self.min_moves_panel_ax.patch.set_alpha(0.3)
+        self.min_moves_panel_ax.axis('off')
+        
+        # Add label for min simultaneous moves - larger, bolder font
+        min_moves_label_ax = self.vis.fig.add_axes([0.82, 0.42, 0.15, 0.03])
+        min_moves_label_ax.text(0.5, 0.5, 'MIN Simultaneous Moves', 
+                               ha='center', va='center', 
+                               fontweight='bold', fontsize=9)
         min_moves_label_ax.axis('off')
         
         # Add slider for min simultaneous moves
-        self.min_moves_slider_ax = self.vis.fig.add_axes([0.84, 0.4, 0.1, 0.03])
+        self.min_moves_slider_ax = self.vis.fig.add_axes([0.84, 0.38, 0.1, 0.03])
         self.min_moves_slider = plt.Slider(
             self.min_moves_slider_ax, '',
             1, 5, valinit=self.min_simultaneous_moves, valstep=1
         )
         self.min_moves_slider.on_changed(self.update_min_simultaneous_moves)
 
-        # Add a label for animation speed
-        anim_speed_label_ax = self.vis.fig.add_axes([0.82, 0.35, 0.15, 0.05])
-        anim_speed_label_ax.text(0.5, 0.5, 'Animation Speed', ha='center', va='center')
+        # ==================== ANIMATION SPEED CONTROL ====================
+        # Add background panel for animation speed
+        self.anim_speed_panel_ax = self.vis.fig.add_axes([0.81, 0.23, 0.17, 0.1])
+        self.anim_speed_panel_ax.patch.set_facecolor('lightgray')
+        self.anim_speed_panel_ax.patch.set_alpha(0.3)
+        self.anim_speed_panel_ax.axis('off')
+        
+        # Add label for animation speed - larger, bolder font
+        anim_speed_label_ax = self.vis.fig.add_axes([0.82, 0.29, 0.15, 0.03])
+        anim_speed_label_ax.text(0.5, 0.5, 'Animation Speed', 
+                                ha='center', va='center', 
+                                fontweight='bold', fontsize=9)
         anim_speed_label_ax.axis('off')
         
         # Add slider for animation speed (in seconds)
-        self.anim_speed_slider_ax = self.vis.fig.add_axes([0.84, 0.3, 0.1, 0.03])
+        self.anim_speed_slider_ax = self.vis.fig.add_axes([0.84, 0.25, 0.1, 0.03])
         self.anim_speed_slider = plt.Slider(
             self.anim_speed_slider_ax, '',
             0.01, 1.0, valinit=self.animation_speed, valfmt='%.2f'
@@ -107,8 +134,9 @@ class SearchController:
         self.anim_speed_slider.on_changed(self.update_animation_speed)
         
         # Add a label to explain animation speed
-        anim_speed_info_ax = self.vis.fig.add_axes([0.82, 0.25, 0.15, 0.05])
-        anim_speed_info_ax.text(0.5, 0.5, 'Seconds per step', ha='center', va='center', fontsize=8)
+        anim_speed_info_ax = self.vis.fig.add_axes([0.82, 0.21, 0.15, 0.03])
+        anim_speed_info_ax.text(0.5, 0.5, 'Seconds per step', 
+                               ha='center', va='center', fontsize=8)
         anim_speed_info_ax.axis('off')
 
         # Print initialization info
