@@ -463,44 +463,36 @@ class SearchController:
     
     def run_search(self, event):
         """Runs the search when the Search button is clicked."""
-        # Clear any selection or obstacle mode
+    # Clear any selection or obstacle mode
         self.selection_mode = False
         self.selection_active = False
         self.obstacle_mode = False
         self.select_button.label.set_text("Select Goal")
         self.obstacle_button.label.set_text("Add Obstacles")
-        
-        # Start the timer
+    
+    # Start the timer
         self.search_start_time = time.time()
-        self.timer_active = True
         self.timer_text.set_text("Time: 0.0s")
-        
-        # Clear goal shape highlight
+    
+    # Clear goal shape highlight
         self.vis.draw_grid()
         self.vis.highlight_obstacles(self.obstacles)
         self.vis.update_text("Searching for a path...", color="red")
         plt.pause(0.1)  # Force update to show "Searching..." before search starts
-        
+    
         print("\nSearching for optimal path with connectivity constraint...")
         print(f"Avoiding {len(self.obstacles)} obstacles")
         print(f"Using advanced movement patterns including snake streaming for narrow passages...")
-        
-        # Set up a timer to update the timer display
-        timer_id = self.vis.fig.canvas.new_timer(interval=100)  # Update every 100ms
-        timer_id.add_callback(self.update_timer)
-        timer_id.start()
-        
-        # Run the search
+    
+    # Run the search
         path = self.agent.search(self.time_limit)
-        
-        # Stop the timer
+    
+    # Calculate elapsed time
         search_time = time.time() - self.search_start_time
-        self.timer_active = False
-        timer_id.stop()
-        
-        # Update the final time
+    
+    # Set final time
         self.timer_text.set_text(f"Time: {search_time:.1f}s")
-        
+    
         self.search_completed = True
 
         if path:
