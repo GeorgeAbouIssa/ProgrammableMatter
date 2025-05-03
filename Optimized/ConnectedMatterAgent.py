@@ -38,6 +38,12 @@ class ConnectedMatterAgent:
         self.beam_width = 500  # Increased beam width for better exploration
         self.max_iterations = 100000  # Limit iterations to prevent infinite loops
         
+        # For obstacle pathfinding optimization
+        self.distance_map_cache = {}
+        self.obstacle_maze = None
+        if obstacles:
+            self.build_obstacle_maze()
+            
     def calculate_centroid(self, positions):
         """Calculate the centroid (average position) of a set of positions"""
         if not positions:
@@ -167,6 +173,7 @@ class ConnectedMatterAgent:
         """
         Generate valid morphing moves that maintain connectivity
         Supports multiple simultaneous block movements with minimum requirement
+        Now optimized for obstacle environments
         """
         state_key = hash(state)
         if state_key in self.valid_moves_cache:
@@ -189,10 +196,44 @@ class ConnectedMatterAgent:
                 if self.is_connected(temp_state):
                     movable_points.add(point)
         
-        # Generate single block moves
+        # Generate single block moves, prioritizing moves toward the goal
         for point in movable_points:
-            # Try moving in each direction
-            for dx, dy in self.directions:
+            # Find closest goal position for this point
+            closest_goal = None
+            min_dist = float('inf')
+            
+            for goal_pos in self.goal_state:
+                if goal_pos not in state_set:  # Only consider unoccupied goals
+                    if self.obstacles:
+                        dist = self.obstacle_aware_distance(point, goal_pos)
+                    else:
+                        dist = abs(point[0] - goal_pos[0]) + abs(point[1] - goal_pos[1])
+                        
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_goal = goal_pos
+                        
+            # Prioritize directions toward the closest goal
+            ordered_directions = self.directions.copy()
+            if closest_goal:
+                # Calculate direction vectors
+                dx = 1 if closest_goal[0] > point[0] else -1 if closest_goal[0] < point[0] else 0
+                dy = 1 if closest_goal[1] > point[1] else -1 if closest_goal[1] < point[1] else 0
+                
+                # Put preferred direction first
+                preferred_dir = (dx, dy)
+                if preferred_dir in ordered_directions:
+                    ordered_directions.remove(preferred_dir)
+                    ordered_directions.insert(0, preferred_dir)
+                
+                # Also prioritize partial matches (just x or just y component)
+                for i, dir in enumerate(ordered_directions.copy()):
+                    if dir[0] == dx or dir[1] == dy:
+                        ordered_directions.remove(dir)
+                        ordered_directions.insert(1, dir)
+                
+            # Try moving in each direction, starting with preferred ones
+            for dx, dy in ordered_directions:
                 new_pos = (point[0] + dx, point[1] + dy)
                 
                 # Skip if out of bounds or is an obstacle
@@ -228,8 +269,14 @@ class ConnectedMatterAgent:
         # Start with empty valid moves list
         valid_moves = []
         
+        # In dense obstacle environments, more simultaneous moves could be better
+        # Increase minimum number of simultaneous moves based on obstacle density
+        local_min_moves = self.min_simultaneous_moves
+        if len(self.obstacles) > 20 and local_min_moves == 1:
+            local_min_moves = min(2, self.max_simultaneous_moves)
+            
         # Generate multi-block moves
-        for k in range(self.min_simultaneous_moves, min(self.max_simultaneous_moves + 1, len(single_moves) + 1)):
+        for k in range(local_min_moves, min(self.max_simultaneous_moves + 1, len(single_moves) + 1)):
             # Generate combinations of k moves
             for combo in self._generate_move_combinations(single_moves, k):
                 # Check if the combination is valid (no conflicts)
@@ -291,19 +338,24 @@ class ConnectedMatterAgent:
         """
         Generate chain moves where one block moves into the space of another
         while that block moves elsewhere, maintaining connectivity
+        Now obstacle-aware and optimized for tight spaces
         """
         state_set = set(state)
         valid_moves = []
         
         # For each block, try to move it toward a goal position
         for pos in state_set:
-            # Find closest goal position
+            # Find closest goal position using obstacle-aware pathfinding
             min_dist = float('inf')
             closest_goal = None
             
             for goal_pos in self.goal_state:
                 if goal_pos not in state_set:  # Only consider unoccupied goals
-                    dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
+                    if self.obstacles:
+                        dist = self.obstacle_aware_distance(pos, goal_pos)
+                    else:
+                        dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
+                    
                     if dist < min_dist:
                         min_dist = dist
                         closest_goal = goal_pos
@@ -329,8 +381,31 @@ class ConnectedMatterAgent:
             
             # If next position is occupied, try chain move
             if next_pos in state_set:
-                # Try moving the blocking block elsewhere
+                # Try moving the blocking block in the same direction if possible
+                chain_pos = (next_pos[0] + dx, next_pos[1] + dy)
+                
+                # Check if chain position is valid
+                if (0 <= chain_pos[0] < self.grid_size[0] and 
+                    0 <= chain_pos[1] < self.grid_size[1] and
+                    chain_pos not in state_set and
+                    chain_pos not in self.obstacles):
+                    
+                    # Create new state by moving both blocks in the same direction
+                    new_state_set = state_set.copy()
+                    new_state_set.remove(pos)
+                    new_state_set.remove(next_pos)
+                    new_state_set.add(next_pos)
+                    new_state_set.add(chain_pos)
+                    
+                    # Check if new state is connected
+                    if self.is_connected(new_state_set):
+                        valid_moves.append(frozenset(new_state_set))
+                
+                # Also try all other directions for the blocking block
                 for chain_dx, chain_dy in self.directions:
+                    if (chain_dx, chain_dy) == (dx, dy):
+                        continue  # Skip the direction we just tried
+                    
                     chain_pos = (next_pos[0] + chain_dx, next_pos[1] + chain_dy)
                     
                     # Skip if out of bounds, occupied, is an obstacle, or original position
@@ -437,20 +512,40 @@ class ConnectedMatterAgent:
     def block_heuristic(self, state):
         """
         Heuristic for block movement phase:
-        Calculate Manhattan distance from current centroid to goal centroid
+        Now accounts for obstacles between current position and goal
         """
         if not state:
             return float('inf')
             
         current_centroid = self.calculate_centroid(state)
+        goal_centroid_int = (int(self.goal_centroid[0]), int(self.goal_centroid[1]))
         
-        # Pure Manhattan distance between centroids without the +1 offset
-        return abs(current_centroid[0] - self.goal_centroid[0]) + abs(current_centroid[1] - self.goal_centroid[1])
+        # If no obstacles, use simple Manhattan distance
+        if not self.obstacles:
+            return abs(current_centroid[0] - self.goal_centroid[0]) + abs(current_centroid[1] - self.goal_centroid[1])
+        
+        # With obstacles, calculate path distance to goal centroid
+        # Round centroid to nearest grid cell for distance calculation
+        current_centroid_int = (int(round(current_centroid[0])), int(round(current_centroid[1])))
+        
+        # Ensure centroid is within bounds
+        current_centroid_int = (
+            max(0, min(current_centroid_int[0], self.grid_size[0]-1)),
+            max(0, min(current_centroid_int[1], self.grid_size[1]-1))
+        )
+        goal_centroid_int = (
+            max(0, min(goal_centroid_int[0], self.grid_size[0]-1)),
+            max(0, min(goal_centroid_int[1], self.grid_size[1]-1))
+        )
+        
+        # Get obstacle-aware distance
+        return self.obstacle_aware_distance(current_centroid_int, goal_centroid_int)
     
     def improved_morphing_heuristic(self, state):
         """
         Improved heuristic for morphing phase:
-        Uses bipartite matching to find optimal assignment of blocks to goal positions
+        Uses bipartite matching to find optimal assignment of blocks to goal positions,
+        now accounts for obstacles
         """
         if not state:
             return float('inf')
@@ -462,13 +557,17 @@ class ConnectedMatterAgent:
         if len(state_list) != len(goal_list):
             return float('inf')
         
-        # Build distance matrix
+        # Build distance matrix with obstacle-aware distances
         distances = []
         for pos in state_list:
             row = []
             for goal_pos in goal_list:
-                # Manhattan distance
-                dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
+                # Use obstacle-aware distance calculation
+                if self.obstacles:
+                    dist = self.obstacle_aware_distance(pos, goal_pos)
+                else:
+                    # Use faster Manhattan distance if no obstacles
+                    dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
                 row.append(dist)
             distances.append(row)
         
@@ -493,6 +592,10 @@ class ConnectedMatterAgent:
             if best_j != -1:
                 assigned_cols.add(best_j)
                 total_distance += min_dist
+                
+                # If a path is impossible (infinite distance), heavily penalize
+                if min_dist == float('inf'):
+                    return float('inf')
             else:
                 # No assignment possible
                 return float('inf')
@@ -616,10 +719,19 @@ class ConnectedMatterAgent:
         """
         Improved Phase 2: Morph the block into the goal shape while maintaining connectivity
         Uses beam search and intelligent move generation with support for simultaneous moves
+        Now with adaptive beam width based on obstacle density
         """
         print(f"Starting Smarter Morphing Phase with {self.min_simultaneous_moves}-{self.max_simultaneous_moves} simultaneous moves...")
         start_time = time.time()
         
+        # Adapt beam width based on obstacle density
+        adaptive_beam_width = self.beam_width
+        if len(self.obstacles) > 0:
+            # Increase beam width for environments with obstacles
+            obstacle_density = len(self.obstacles) / (self.grid_size[0] * self.grid_size[1])
+            adaptive_beam_width = int(self.beam_width * (1 + min(1.0, obstacle_density * 5)))
+            print(f"Adjusted beam width to {adaptive_beam_width} based on obstacle density")
+            
         # Initialize beam search
         open_set = [(self.improved_morphing_heuristic(start_state), 0, start_state)]
         closed_set = set()
@@ -660,9 +772,14 @@ class ConnectedMatterAgent:
                 # Print progress occasionally
                 if iterations % 500 == 0:
                     print(f"Progress: h={best_heuristic}, iterations={iterations}")
+                    
+                # If we're very close to the goal, increase search intensity
+                if best_heuristic < 5 * len(self.goal_state):
+                    adaptive_beam_width *= 2
             
-            # Check for stagnation
-            if time.time() - last_improvement_time > time_limit * 0.3:
+            # Check for stagnation - more patient in obstacle-heavy environments
+            stagnation_tolerance = time_limit * (0.3 + min(0.3, len(self.obstacles) / 100))
+            if time.time() - last_improvement_time > stagnation_tolerance:
                 print("Search stagnated, restarting...")
                 # Clear the beam and start from the best state
                 open_set = [(best_heuristic, g_score[best_state], best_state)]
@@ -696,8 +813,8 @@ class ConnectedMatterAgent:
                     heapq.heappush(open_set, (f_score, tentative_g, neighbor))
             
             # Beam search pruning: keep only the best states
-            if len(open_set) > self.beam_width:
-                open_set = heapq.nsmallest(self.beam_width, open_set)
+            if len(open_set) > adaptive_beam_width:
+                open_set = heapq.nsmallest(adaptive_beam_width, open_set)
                 heapq.heapify(open_set)
         
         # If we exit the loop, either no path was found or time limit reached
@@ -722,10 +839,25 @@ class ConnectedMatterAgent:
     def search(self, time_limit=30):
         """
         Main search method combining block movement and smarter morphing
+        Now with dynamic time allocation based on obstacles
         """
-        # Allocate time for each phase
-        block_time_limit = time_limit * 0.3  # 30% for block movement
-        morphing_time_limit = time_limit * 0.7  # 70% for morphing
+        # Build obstacle maze representation if not already done
+        if self.obstacles and not self.obstacle_maze:
+            self.build_obstacle_maze()
+            
+        # Dynamically allocate time based on obstacle density
+        block_time_ratio = 0.3  # Default 30% for block movement
+        
+        # If there are obstacles, allocate more time for movement phase
+        if len(self.obstacles) > 0:
+            obstacle_density = len(self.obstacles) / (self.grid_size[0] * self.grid_size[1])
+            # Allocate up to 50% for block movement in dense obstacle environments
+            block_time_ratio = min(0.5, 0.3 + obstacle_density * 0.5)
+            
+        block_time_limit = time_limit * block_time_ratio
+        morphing_time_limit = time_limit * (1 - block_time_ratio)
+        
+        print(f"Time allocation: {block_time_ratio:.1%} block movement, {1-block_time_ratio:.1%} morphing")
         
         # Phase 1: Block Movement
         block_path = self.block_movement_phase(block_time_limit)
@@ -809,3 +941,65 @@ class ConnectedMatterAgent:
     
         plt.ioff()  # Turn off interactive mode
         plt.show(block=True)
+    
+    def build_obstacle_maze(self):
+        """Create a grid representation with obstacles for pathfinding"""
+        self.obstacle_maze = [[0 for _ in range(self.grid_size[1])] for _ in range(self.grid_size[0])]
+        for x, y in self.obstacles:
+            if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
+                self.obstacle_maze[x][y] = 1  # Mark obstacle cells
+        
+        # Clear the distance map cache when obstacles change
+        self.distance_map_cache = {}
+        
+    def calculate_distance_map(self, target):
+        """
+        Calculate distance map from all cells to the target,
+        accounting for obstacles (using BFS for accurate distances)
+        """
+        # Check if we've already computed this map
+        if target in self.distance_map_cache:
+            return self.distance_map_cache[target]
+            
+        # Initialize distance map with infinity
+        dist_map = [[float('inf') for _ in range(self.grid_size[1])] for _ in range(self.grid_size[0])]
+        
+        # BFS to calculate distances
+        queue = deque([(target, 0)])  # (position, distance)
+        visited = {target}
+        
+        while queue:
+            (x, y), dist = queue.popleft()
+            dist_map[x][y] = dist
+            
+            # Check all adjacent cells based on topology
+            for dx, dy in self.directions:
+                nx, ny = x + dx, y + dy
+                
+                # Skip if out of bounds or is an obstacle or already visited
+                if not (0 <= nx < self.grid_size[0] and 0 <= ny < self.grid_size[1]):
+                    continue
+                if (nx, ny) in self.obstacles or (nx, ny) in visited:
+                    continue
+                    
+                visited.add((nx, ny))
+                queue.append(((nx, ny), dist + 1))
+        
+        # Cache the result
+        self.distance_map_cache[target] = dist_map
+        return dist_map
+        
+    def obstacle_aware_distance(self, pos, target):
+        """
+        Calculate the distance between a position and a target,
+        accounting for obstacles
+        """
+        # If no obstacles, use Manhattan distance for speed
+        if not self.obstacles:
+            return abs(pos[0] - target[0]) + abs(pos[1] - target[1])
+            
+        # Get or calculate distance map for this target
+        dist_map = self.calculate_distance_map(target)
+        
+        # Return the distance from the map
+        return dist_map[pos[0]][pos[1]]

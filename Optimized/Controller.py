@@ -154,6 +154,7 @@ class SearchController:
         print(f"Topology: {topology}")
         print(f"Time limit: {time_limit} seconds")
         print(f"Constraint: All elements must remain connected during movement")
+        print(f"Movement capabilities: Block movement, morphing, chain moves, sliding, and snake streaming")
 
         # Initialize the agent
         self.agent = ConnectedMatterAgent(
@@ -398,7 +399,7 @@ class SearchController:
             self.run_search(event)
         else:
             self.vis.handle_button_click(event)
-
+    
     def run_search(self, event):
         """Runs the search when the Search button is clicked."""
         # Clear any selection or obstacle mode
@@ -416,6 +417,7 @@ class SearchController:
         
         print("\nSearching for optimal path with connectivity constraint...")
         print(f"Avoiding {len(self.obstacles)} obstacles")
+        print(f"Using advanced movement patterns including snake streaming for narrow passages...")
         start_time = time.time()
         path = self.agent.search(self.time_limit)
         search_time = time.time() - start_time
