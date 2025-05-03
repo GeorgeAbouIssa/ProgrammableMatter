@@ -158,11 +158,11 @@ class SearchController:
         self.timer_active = False
 
         # Add timer display to __init__
-        self.timer_ax = self.vis.fig.add_axes([0.05, 0.43, 0.16, 0.075])
+        self.timer_ax = self.vis.fig.add_axes([0.05, 0.5, 0.16, 0.075])
         self.timer_ax.axis('off')
         self.timer_text = self.timer_ax.text(0.5, 0.5, "Time: 0.0s", 
                                           ha='center', va='center', 
-                                          fontweight='bold', fontsize=10)
+                                          fontweight='bold', fontsize=15)
 
         # Print initialization info
         print(f"Initializing Connected Programmable Matter Agent...")

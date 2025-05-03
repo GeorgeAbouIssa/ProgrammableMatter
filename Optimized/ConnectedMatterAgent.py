@@ -2,6 +2,9 @@ import heapq
 import time
 import matplotlib.pyplot as plt
 from collections import deque
+import threading
+import concurrent.futures
+from functools import partial
 
 class ConnectedMatterAgent:
     def __init__(self, grid_size, start_positions, goal_positions, topology="moore", max_simultaneous_moves=1, min_simultaneous_moves=1, obstacles=None):
@@ -23,9 +26,20 @@ class ConnectedMatterAgent:
         self.start_state = frozenset((x, y) for x, y in start_positions)
         self.goal_state = frozenset((x, y) for x, y in goal_positions)
         
-        # Calculate the centroid of the goal positions for block movement phase
-        # Using exact position calculation instead of average to ensure precise positioning
-        self.goal_centroid = self.calculate_centroid(self.goal_positions)
+        # New: Check if goal state is disconnected and find components
+        self.goal_components = self.find_disconnected_components(self.goal_state)
+        self.is_goal_disconnected = len(self.goal_components) > 1
+        
+        if self.is_goal_disconnected:
+            print(f"Goal state has {len(self.goal_components)} disconnected components")
+            # Calculate centroids for each component
+            self.component_centroids = [self.calculate_centroid(comp) for comp in self.goal_components]
+            # Calculate the overall goal centroid
+            self.goal_centroid = self.calculate_centroid(self.goal_positions)
+        else:
+            # Calculate the centroid of the goal positions for block movement phase
+            # Using exact position calculation instead of average to ensure precise positioning
+            self.goal_centroid = self.calculate_centroid(self.goal_positions)
         
         # Cache for valid moves to avoid recomputation
         self.valid_moves_cache = {}
@@ -35,7 +49,7 @@ class ConnectedMatterAgent:
         self.connectivity_check_cache = {}
         
         # Enhanced parameters for improved search
-        self.beam_width = 500  # Increased beam width for better exploration
+        self.beam_width = 800  # Increased beam width for better exploration
         self.max_iterations = 100000  # Limit iterations to prevent infinite loops
         
         # For obstacle pathfinding optimization
@@ -615,17 +629,21 @@ class ConnectedMatterAgent:
         print("Starting Block Movement Phase...")
         start_time = time.time()
 
-    # Initialize A* search
+        # For disconnected goals, use the modified approach
+        if self.is_goal_disconnected:
+            return self.disconnected_block_movement_phase(time_limit)
+
+        # Initialize A* search
         open_set = [(self.block_heuristic(self.start_state), 0, self.start_state)]
         closed_set = set()
 
-    # Track path and g-scores
+        # Track path and g-scores
         g_score = {self.start_state: 0}
         came_from = {self.start_state: None}
 
-    # Modified: We want to stop 1 grid cell before reaching the centroid
-    # Instead of using a small threshold, we'll check if distance is between 1.0 and 2.0
-    # This ensures we're approximately 1 grid cell away from the goal centroid
+        # Modified: We want to stop 1 grid cell before reaching the centroid
+        # Instead of using a small threshold, we'll check if distance is between 1.0 and 2.0
+        # This ensures we're approximately 1 grid cell away from the goal centroid
         min_distance = 1.0
         max_distance = 1.0
 
@@ -633,11 +651,11 @@ class ConnectedMatterAgent:
             # Get state with lowest f-score
             f, g, current = heapq.heappop(open_set)
     
-        # Skip if already processed
+            # Skip if already processed
             if current in closed_set:
                 continue
         
-        # Check if we're at the desired distance from the goal centroid
+            # Check if we're at the desired distance from the goal centroid
             current_centroid = self.calculate_centroid(current)
             centroid_distance = (abs(current_centroid[0] - self.goal_centroid[0]) + 
                             abs(current_centroid[1] - self.goal_centroid[1]))
@@ -648,12 +666,12 @@ class ConnectedMatterAgent:
         
             closed_set.add(current)
     
-        # Process neighbor states (block moves)
+            # Process neighbor states (block moves)
             for neighbor in self.get_valid_block_moves(current):
                 if neighbor in closed_set:
                     continue
             
-            # Calculate tentative g-score
+                # Calculate tentative g-score
                 tentative_g = g_score[current] + 1
         
                 if neighbor not in g_score or tentative_g < g_score[neighbor]:
@@ -661,12 +679,12 @@ class ConnectedMatterAgent:
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
                 
-                # Modified: Adjust heuristic to prefer states that are close to but not at the centroid
+                    # Modified: Adjust heuristic to prefer states that are close to but not at the centroid
                     neighbor_centroid = self.calculate_centroid(neighbor)
                     neighbor_distance = (abs(neighbor_centroid[0] - self.goal_centroid[0]) + 
-                                   abs(neighbor_centroid[1] - self.goal_centroid[1]))
+                                    abs(neighbor_centroid[1] - self.goal_centroid[1]))
                 
-                # Penalize distances that are too small (< 1.0)
+                    # Penalize distances that are too small (< 1.0)
                     distance_penalty = 0
                     if neighbor_distance < min_distance:
                         distance_penalty = 10 * (min_distance - neighbor_distance)
@@ -674,16 +692,16 @@ class ConnectedMatterAgent:
                     adjusted_heuristic = self.block_heuristic(neighbor) + distance_penalty
                     f_score = tentative_g + adjusted_heuristic
             
-                # Add to open set
+                    # Add to open set
                     heapq.heappush(open_set, (f_score, tentative_g, neighbor))
 
-    # If we exit the loop, either no path was found or time limit reached
+        # If we exit the loop, either no path was found or time limit reached
         if time.time() - start_time >= time_limit:
             print("Block movement phase timed out!")
     
-    # Return the best state we found
+        # Return the best state we found
         if came_from:
-        # Find state with appropriate distance to centroid
+            # Find state with appropriate distance to centroid
             best_state = None
             best_distance_diff = float('inf')
         
@@ -692,13 +710,13 @@ class ConnectedMatterAgent:
                 distance = (abs(state_centroid[0] - self.goal_centroid[0]) + 
                             abs(state_centroid[1] - self.goal_centroid[1]))
             
-            # We want a state that's as close as possible to our target distance range
+                # We want a state that's as close as possible to our target distance range
                 if distance < min_distance:
                     distance_diff = min_distance - distance
                 elif distance > max_distance:
                     distance_diff = distance - max_distance
                 else:
-                # Distance is within our desired range
+                    # Distance is within our desired range
                     best_state = state
                     break
                 
@@ -854,6 +872,10 @@ class ConnectedMatterAgent:
             # Allocate up to 50% for block movement in dense obstacle environments
             block_time_ratio = min(0.5, 0.3 + obstacle_density * 0.5)
             
+        # For disconnected goals, adjust time allocation
+        if self.is_goal_disconnected:
+            return self.search_disconnected_goal(time_limit)
+            
         block_time_limit = time_limit * block_time_ratio
         morphing_time_limit = time_limit * (1 - block_time_ratio)
         
@@ -1003,3 +1025,631 @@ class ConnectedMatterAgent:
         
         # Return the distance from the map
         return dist_map[pos[0]][pos[1]]
+        
+    # New methods for handling disconnected goal states
+    
+    def find_disconnected_components(self, positions):
+        """
+        Find all disconnected components in a set of positions using BFS
+        Returns a list of sets, where each set contains positions in one component
+        """
+        if not positions:
+            return []
+            
+        positions_set = set(positions)
+        components = []
+        
+        while positions_set:
+            # Start a new component
+            component = set()
+            start = next(iter(positions_set))
+            
+            # BFS to find all connected positions
+            queue = deque([start])
+            component.add(start)
+            positions_set.remove(start)
+            
+            while queue:
+                current = queue.popleft()
+                
+                # Check all adjacent positions
+                for dx, dy in self.directions:
+                    neighbor = (current[0] + dx, current[1] + dy)
+                    if neighbor in positions_set:
+                        component.add(neighbor)
+                        positions_set.remove(neighbor)
+                        queue.append(neighbor)
+            
+            # Add the component to the list
+            components.append(component)
+        
+        return components
+    
+    def disconnected_block_movement_phase(self, time_limit=15):
+        """
+        Modified Phase 1 for disconnected goal states:
+        Moves the entire block toward a strategic position for splitting
+        """
+        print("Starting Disconnected Block Movement Phase...")
+        start_time = time.time()
+        
+        # Find the closest goal component to the start state
+        closest_component_idx = self.find_closest_component()
+        closest_component = self.goal_components[closest_component_idx]
+        closest_centroid = self.component_centroids[closest_component_idx]
+        
+        # Determine if vertical positioning is better based on y-axis centroids
+        all_components_y = [centroid[1] for centroid in self.component_centroids]
+        overall_y = self.goal_centroid[1]
+        
+        # Check if centroid of all shapes is closer to y level of the closest shape
+        use_vertical_approach = abs(overall_y - closest_centroid[1]) < sum([abs(y - closest_centroid[1]) for y in all_components_y]) / len(all_components_y)
+        
+        if use_vertical_approach:
+            print("Using vertical approach for block movement")
+            # Target position is at the overall centroid with y-level of closest component
+            target_centroid = (self.goal_centroid[0], closest_centroid[1])
+        else:
+            print("Using standard approach for block movement")
+            # Target position is the overall centroid
+            target_centroid = self.goal_centroid
+            
+        # Cache original goal centroid and temporarily replace with target
+        original_centroid = self.goal_centroid
+        self.goal_centroid = target_centroid
+        
+        # Use standard A* search but with the modified target
+        open_set = [(self.block_heuristic(self.start_state), 0, self.start_state)]
+        closed_set = set()
+        g_score = {self.start_state: 0}
+        came_from = {self.start_state: None}
+        
+        # We want to get close to the target position
+        min_distance = 1.0
+        max_distance = 2.0
+
+        while open_set and time.time() - start_time < time_limit:
+            # Get state with lowest f-score
+            f, g, current = heapq.heappop(open_set)
+    
+            # Skip if already processed
+            if current in closed_set:
+                continue
+        
+            # Check if we're at the desired distance from the goal centroid
+            current_centroid = self.calculate_centroid(current)
+            centroid_distance = (abs(current_centroid[0] - target_centroid[0]) + 
+                            abs(current_centroid[1] - target_centroid[1]))
+                        
+            if min_distance <= centroid_distance <= max_distance:
+                print(f"Block stopped at strategic position. Distance: {centroid_distance}")
+                # Restore original goal centroid
+                self.goal_centroid = original_centroid
+                return self.reconstruct_path(came_from, current)
+        
+            closed_set.add(current)
+    
+            # Process neighbor states (block moves)
+            for neighbor in self.get_valid_block_moves(current):
+                if neighbor in closed_set:
+                    continue
+            
+                # Calculate tentative g-score
+                tentative_g = g_score[current] + 1
+        
+                if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                    # This is a better path
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                
+                    # Adjust heuristic to prefer states close to target
+                    neighbor_centroid = self.calculate_centroid(neighbor)
+                    neighbor_distance = (abs(neighbor_centroid[0] - target_centroid[0]) + 
+                                    abs(neighbor_centroid[1] - target_centroid[1]))
+                
+                    # Penalize distances that are too small
+                    distance_penalty = 0
+                    if neighbor_distance < min_distance:
+                        distance_penalty = 10 * (min_distance - neighbor_distance)
+                
+                    # Calculate Manhattan distance to target
+                    if self.obstacles:
+                        neighbor_centroid_int = (int(round(neighbor_centroid[0])), int(round(neighbor_centroid[1])))
+                        target_centroid_int = (int(round(target_centroid[0])), int(round(target_centroid[1])))
+                        
+                        # Ensure centroids are within bounds
+                        neighbor_centroid_int = (
+                            max(0, min(neighbor_centroid_int[0], self.grid_size[0]-1)),
+                            max(0, min(neighbor_centroid_int[1], self.grid_size[1]-1))
+                        )
+                        target_centroid_int = (
+                            max(0, min(target_centroid_int[0], self.grid_size[0]-1)),
+                            max(0, min(target_centroid_int[1], self.grid_size[1]-1))
+                        )
+                        
+                        adjusted_heuristic = self.obstacle_aware_distance(neighbor_centroid_int, target_centroid_int) + distance_penalty
+                    else:
+                        adjusted_heuristic = neighbor_distance + distance_penalty
+                        
+                    f_score = tentative_g + adjusted_heuristic
+                    heapq.heappush(open_set, (f_score, tentative_g, neighbor))
+
+        # Restore original goal centroid
+        self.goal_centroid = original_centroid
+        
+        # If we exit the loop, find the best available state
+        if came_from:
+            best_state = None
+            best_distance_diff = float('inf')
+        
+            for state in came_from.keys():
+                state_centroid = self.calculate_centroid(state)
+                distance = (abs(state_centroid[0] - target_centroid[0]) + 
+                            abs(state_centroid[1] - target_centroid[1]))
+            
+                if distance < min_distance:
+                    distance_diff = min_distance - distance
+                elif distance > max_distance:
+                    distance_diff = distance - max_distance
+                else:
+                    best_state = state
+                    break
+                
+                if distance_diff < best_distance_diff:
+                    best_distance_diff = distance_diff
+                    best_state = state
+        
+            if best_state:
+                print(f"Best strategic position found for disconnected goal")
+                return self.reconstruct_path(came_from, best_state)
+    
+        return [self.start_state]  # No movement possible
+    
+    def find_closest_component(self):
+        """Find the index of the closest goal component to the start state"""
+        start_centroid = self.calculate_centroid(self.start_state)
+        min_distance = float('inf')
+        closest_idx = 0
+        
+        for idx, centroid in enumerate(self.component_centroids):
+            distance = abs(start_centroid[0] - centroid[0]) + abs(start_centroid[1] - centroid[1])
+            if distance < min_distance:
+                min_distance = distance
+                closest_idx = idx
+                
+        return closest_idx
+    
+    def assign_blocks_to_components(self, state):
+        """
+        Assign blocks from the current state to goal components based on proximity
+        Returns a dictionary mapping each component index to a set of positions
+        """
+        assignments = {i: set() for i in range(len(self.goal_components))}
+        state_positions = list(state)
+        
+        # Create a dictionary to track assigned positions
+        assigned = set()
+        
+        # First, count how many blocks we need for each component
+        component_sizes = [len(comp) for comp in self.goal_components]
+        total_blocks_needed = sum(component_sizes)
+        
+        # Ensure we have enough blocks
+        if len(state_positions) < total_blocks_needed:
+            print(f"Warning: Not enough blocks ({len(state_positions)}) for goal state ({total_blocks_needed})")
+            return None
+            
+        # Calculate distance from each block to each component centroid
+        distances = []
+        for pos in state_positions:
+            pos_distances = []
+            for idx, centroid in enumerate(self.component_centroids):
+                if self.obstacles:
+                    dist = self.obstacle_aware_distance(pos, (int(centroid[0]), int(centroid[1])))
+                else:
+                    dist = abs(pos[0] - centroid[0]) + abs(pos[1] - centroid[1])
+                pos_distances.append((idx, dist))
+            distances.append((pos, sorted(pos_distances, key=lambda x: x[1])))
+            
+        # Sort blocks by their distance to their closest component
+        distances.sort(key=lambda x: x[1][0][1])
+        
+        # Assign blocks to components in order of increasing distance
+        for pos, component_distances in distances:
+            for component_idx, dist in component_distances:
+                if len(assignments[component_idx]) < len(self.goal_components[component_idx]) and pos not in assigned:
+                    assignments[component_idx].add(pos)
+                    assigned.add(pos)
+                    break
+                    
+        # Ensure all blocks are assigned
+        unassigned = set(state_positions) - assigned
+        if unassigned:
+            # Assign remaining blocks to components that still need them
+            for pos in unassigned:
+                for component_idx in range(len(self.goal_components)):
+                    if len(assignments[component_idx]) < len(self.goal_components[component_idx]):
+                        assignments[component_idx].add(pos)
+                        assigned.add(pos)
+                        break
+                        
+        # Double-check that we've assigned the right number of blocks to each component
+        for idx, component in enumerate(self.goal_components):
+            if len(assignments[idx]) != len(component):
+                print(f"Warning: Component {idx} has {len(assignments[idx])} blocks assigned but needs {len(component)}")
+                
+        return assignments
+    
+    def plan_disconnect_moves(self, state, assignments):
+        """
+        Plan a sequence of moves to disconnect the shape into separate components
+        Returns a list of states representing the disconnection process
+        """
+        # Start with current state
+        current_state = set(state)
+        path = [frozenset(current_state)]
+        
+        # Group the assignments by component
+        component_positions = [set(assignments[i]) for i in range(len(self.goal_components))]
+        
+        # Check if the state is already naturally separable
+        is_separable = True
+        for i in range(len(component_positions)):
+            for j in range(i+1, len(component_positions)):
+                # Check if there's a direct connection between components
+                for pos_i in component_positions[i]:
+                    for pos_j in component_positions[j]:
+                        # Check if positions are adjacent
+                        if any((pos_i[0] + dx, pos_i[1] + dy) == pos_j for dx, dy in self.directions):
+                            is_separable = False
+                            break
+                    if not is_separable:
+                        break
+                if not is_separable:
+                    break
+            if not is_separable:
+                break
+                
+        # If already separable, return current state
+        if is_separable:
+            print("State is already naturally separable into components")
+            return path
+            
+        # Find minimal set of points that connect the components
+        connection_points = set()
+        for i in range(len(component_positions)):
+            for j in range(i+1, len(component_positions)):
+                # Find all connections between components i and j
+                for pos_i in component_positions[i]:
+                    for pos_j in component_positions[j]:
+                        # Check if positions are adjacent
+                        if any((pos_i[0] + dx, pos_i[1] + dy) == pos_j for dx, dy in self.directions):
+                            # Add both positions to connection points
+                            connection_points.add(pos_i)
+                            connection_points.add(pos_j)
+        
+        # For theoretical disconnection, we don't need to actually move blocks
+        # Just mark the connection points as if they're disconnected
+        print(f"Identified {len(connection_points)} connection points for theoretical disconnection")
+        
+        # Return current state as the disconnection plan
+        # The actual disconnection will happen during the morphing phase
+        return path
+    
+    def component_morphing_heuristic(self, state, goal_component):
+        """
+        Heuristic for morphing a specific component
+        """
+        if not state:
+            return float('inf')
+            
+        state_list = list(state)
+        goal_list = list(goal_component)
+        
+        # Early exit if states have different sizes
+        if len(state_list) != len(goal_list):
+            return float('inf')
+        
+        # Build distance matrix with obstacle-aware distances
+        distances = []
+        for pos in state_list:
+            row = []
+            for goal_pos in goal_list:
+                # Use obstacle-aware distance calculation
+                if self.obstacles:
+                    dist = self.obstacle_aware_distance(pos, goal_pos)
+                else:
+                    # Use faster Manhattan distance if no obstacles
+                    dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
+                row.append(dist)
+            distances.append(row)
+        
+        # Use greedy assignment algorithm
+        total_distance = 0
+        assigned_cols = set()
+        
+        # Sort rows by minimum distance
+        row_indices = list(range(len(state_list)))
+        row_indices.sort(key=lambda i: min(distances[i]))
+        
+        for i in row_indices:
+            # Find closest unassigned goal position
+            min_dist = float('inf')
+            best_j = -1
+            
+            for j in range(len(goal_list)):
+                if j not in assigned_cols and distances[i][j] < min_dist:
+                    min_dist = distances[i][j]
+                    best_j = j
+            
+            if best_j != -1:
+                assigned_cols.add(best_j)
+                total_distance += min_dist
+                
+                # If a path is impossible, heavily penalize
+                if min_dist == float('inf'):
+                    return float('inf')
+            else:
+                # No assignment possible
+                return float('inf')
+        
+        # Add connectivity bonus: prefer states that have more blocks in goal positions
+        goal_component_set = frozenset(goal_component)
+        matching_positions = len(frozenset(state).intersection(goal_component_set))
+        connectivity_bonus = -matching_positions * 0.5  # Negative to encourage more matches
+        
+        return total_distance + connectivity_bonus
+    
+    def component_morphing_phase(self, start_state, goal_component, time_limit=15):
+        """
+        Morph a specific component into its goal shape
+        """
+        start_time = time.time()
+        
+        # Adapt beam width based on obstacle density
+        adaptive_beam_width = self.beam_width
+        if len(self.obstacles) > 0:
+            obstacle_density = len(self.obstacles) / (self.grid_size[0] * self.grid_size[1])
+            adaptive_beam_width = int(self.beam_width * (1 + min(1.0, obstacle_density * 5)))
+            
+        # Initialize beam search
+        open_set = [(self.component_morphing_heuristic(start_state, goal_component), 0, start_state)]
+        closed_set = set()
+        
+        # Track path, g-scores, and best state
+        g_score = {start_state: 0}
+        came_from = {start_state: None}
+        
+        # Track best state seen so far
+        best_state = start_state
+        best_heuristic = self.component_morphing_heuristic(start_state, goal_component)
+        
+        iterations = 0
+        last_improvement_time = time.time()
+        goal_component_set = frozenset(goal_component)
+        
+        while open_set and time.time() - start_time < time_limit:
+            iterations += 1
+            
+            # Get state with lowest f-score
+            f, g, current = heapq.heappop(open_set)
+            
+            # Skip if already processed
+            if current in closed_set:
+                continue
+            
+            # Check if goal reached
+            if current == goal_component_set:
+                print(f"Component goal reached after {iterations} iterations!")
+                return self.reconstruct_path(came_from, current)
+            
+            # Check if this is the best state seen so far
+            current_heuristic = self.component_morphing_heuristic(current, goal_component)
+            if current_heuristic < best_heuristic:
+                best_state = current
+                best_heuristic = current_heuristic
+                last_improvement_time = time.time()
+                
+                # Print progress occasionally
+                if iterations % 500 == 0:
+                    print(f"Component progress: h={best_heuristic}, iterations={iterations}")
+                
+            # If we're very close to the goal, increase search intensity
+                if best_heuristic < 5 * len(goal_component):
+                    adaptive_beam_width *= 2
+        
+            # Check for stagnation
+            stagnation_tolerance = time_limit * 0.3
+            if time.time() - last_improvement_time > stagnation_tolerance:
+                print("Component search stagnated, restarting...")
+                # Clear the beam and start from the best state
+                open_set = [(best_heuristic, g_score[best_state], best_state)]
+                last_improvement_time = time.time()
+        
+            # Limit iterations to prevent infinite loops
+            if iterations >= self.max_iterations:
+                print(f"Reached max iterations ({self.max_iterations}) for component morphing")
+                break
+            
+            closed_set.add(current)
+        
+            # Get valid moves for this component
+            neighbors = self.get_all_valid_moves(current)
+        
+            # Process each neighbor
+            for neighbor in neighbors:
+                if neighbor in closed_set:
+                    continue
+            
+                # Skip if neighbor has wrong size
+                if len(neighbor) != len(goal_component):
+                    continue
+            
+                # Calculate tentative g-score
+                tentative_g = g_score[current] + 1
+            
+                if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                    # This is a better path
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + self.component_morphing_heuristic(neighbor, goal_component)
+                
+                    # Add to open set
+                    heapq.heappush(open_set, (f_score, tentative_g, neighbor))
+        
+            # Beam search pruning: keep only the best states
+            if len(open_set) > adaptive_beam_width:
+                open_set = heapq.nsmallest(adaptive_beam_width, open_set)
+                heapq.heapify(open_set)
+    
+        # If we exit the loop, return the best state found
+        print(f"Component morphing timed out after {iterations} iterations!")
+        return self.reconstruct_path(came_from, best_state)
+
+    def search_disconnected_goal(self, time_limit=30):
+        """
+        Search method for disconnected goal states:
+        1. Move blocks to strategic position
+        2. Assign blocks to components
+        3. Morph each component in parallel
+        """
+        print(f"Starting search for disconnected goal with {len(self.goal_components)} components")
+        start_time = time.time()
+    
+        # Allocate time for different phases
+        move_time_ratio = 0.2  # 20% for block movement
+        disconnect_time_ratio = 0.1  # 10% for disconnection planning
+        morphing_time_ratio = 0.7  # 70% for morphing
+    
+        # Adjust ratios if obstacles are present
+        if len(self.obstacles) > 0:
+            obstacle_density = len(self.obstacles) / (self.grid_size[0] * self.grid_size[1])
+            move_time_ratio = min(0.4, 0.2 + obstacle_density * 0.5)  # Up to 40% for movement
+            morphing_time_ratio = 1.0 - move_time_ratio - disconnect_time_ratio
+    
+        move_time_limit = time_limit * move_time_ratio
+        disconnect_time_limit = time_limit * disconnect_time_ratio
+        morphing_time_limit = time_limit * morphing_time_ratio
+    
+        print(f"Time allocation: {move_time_ratio:.1%} block movement, "
+                f"{disconnect_time_ratio:.1%} disconnection planning, "
+                f"{morphing_time_ratio:.1%} morphing")
+    
+        # Phase 1: Strategic Block Movement
+        block_path = self.disconnected_block_movement_phase(move_time_limit)
+    
+        if not block_path:
+            print("Block movement phase failed!")
+            return None
+    
+        # Get the final state from block movement phase
+        block_final_state = frozenset(block_path[-1])
+    
+        # Phase 2: Assign blocks to components and plan disconnection
+        assignments_start_time = time.time()
+        assignments = self.assign_blocks_to_components(block_final_state)
+    
+        if assignments is None:
+            print("Failed to assign blocks to components!")
+            return block_path
+    
+        # Theoretical disconnection planning
+        disconnect_path = self.plan_disconnect_moves(block_final_state, assignments)
+        disconnect_time_used = time.time() - assignments_start_time
+    
+        # Add remaining disconnect time to morphing time
+        if disconnect_time_used < disconnect_time_limit:
+            morphing_time_limit += (disconnect_time_limit - disconnect_time_used)
+    
+        # Phase 3: Parallel Morphing of Components
+        print(f"Starting parallel morphing of {len(self.goal_components)} components")
+    
+        # Prepare component states and goals
+        component_start_states = []
+        for i in range(len(self.goal_components)):
+            component_start_states.append(frozenset(assignments[i]))
+    
+        # Time allocation for each component based on its size
+        total_blocks = sum(len(comp) for comp in self.goal_components)
+        component_time_limits = [
+            morphing_time_limit * len(comp) / total_blocks
+            for comp in self.goal_components
+        ]
+    
+        # Use thread pool for parallel morphing
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(self.goal_components)) as executor:
+            # Submit tasks for each component
+            futures = []
+            for i in range(len(self.goal_components)):
+                futures.append(
+                    executor.submit(
+                        self.component_morphing_phase,
+                        component_start_states[i],
+                        self.goal_components[i],
+                        component_time_limits[i]
+                    )
+                )
+        
+            # Collect results as they complete
+            component_paths = []
+            for future in concurrent.futures.as_completed(futures):
+                component_paths.append(future.result())
+    
+        # Combine the paths from all components
+        combined_path = block_path[:-1]  # Remove the last state from block path
+    
+        # Add the component paths after the block movement
+        # For visualization, we'll alternate steps from each component
+        # to show them moving simultaneously
+        max_component_path_length = max(len(path) for path in component_paths)
+    
+        for step in range(max_component_path_length):
+            combined_state = set()
+            for i, path in enumerate(component_paths):
+                # If this component's path is long enough, add its state at this step
+                if step < len(path):
+                    combined_state.update(path[step])
+        
+            # Add the combined state to the path if not empty
+            if combined_state:
+                combined_path.append(list(combined_state))
+    
+        return combined_path
+
+    def get_disconnected_valid_moves(self, state, goal_components):
+        """
+        Generate valid moves for disconnected components
+        Allows moves that maintain connectivity within each component
+        But doesn't require connectivity between components
+        """
+        # Find the components in the current state
+        current_components = self.find_disconnected_components(state)
+    
+        # If we have fewer components than needed, can't generate valid disconnected moves
+        if len(current_components) < len(goal_components):
+            return self.get_all_valid_moves(state)
+    
+        # Generate moves for each component separately
+        all_moves = []
+    
+        for component in current_components:
+            component_moves = []
+        
+            # Get basic morphing moves for this component
+            component_state = frozenset(component)
+            basic_moves = self.get_valid_morphing_moves(component_state)
+            chain_moves = self.get_smart_chain_moves(component_state)
+            sliding_moves = self.get_sliding_chain_moves(component_state)
+        
+            # Combine all move types
+            component_moves.extend(basic_moves)
+            component_moves.extend(chain_moves)
+            component_moves.extend(sliding_moves)
+        
+            # For each component move, create a new overall state
+            for move in component_moves:
+                # Create new overall state with this component's move
+                new_state = (state - component_state) | move
+                all_moves.append(frozenset(new_state))
+    
+        return all_moves
