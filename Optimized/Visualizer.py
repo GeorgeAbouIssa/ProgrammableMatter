@@ -123,8 +123,7 @@ class Visualizer:
             for pos in positions:
                 x, y = pos
                 self.ax.add_patch(plt.Rectangle((y, x), 1, 1, color='grey'))
-            # No more text labels
-        
+                
             plt.pause(self.animation_speed)  # Use customizable animation speed
             self.current_step += 1  # Move to the next step
 
@@ -145,6 +144,14 @@ class Visualizer:
                 rect = plt.Rectangle((y - 0.5, x - 0.5), 1, 1, color='green', alpha=0.3)
             else:
                 rect = plt.Rectangle((y, x), 1, 1, color='green', alpha=0.3)
+            self.ax.add_patch(rect)
+        plt.draw()
+        
+    def highlight_obstacles(self, obstacles):
+        """Highlight obstacles with a solid red color"""
+        for pos in obstacles:
+            x, y = pos
+            rect = plt.Rectangle((y, x), 1, 1, color='red', alpha=0.7)
             self.ax.add_patch(rect)
         plt.draw()
 

@@ -17,6 +17,7 @@ class SearchController:
         self.max_simultaneous_moves = max_simultaneous_moves
         self.min_simultaneous_moves = min(min_simultaneous_moves, max_simultaneous_moves)
         self.search_completed = False
+        self.obstacles = set()  # Store obstacle positions
 
         # Enable interactive mode so the grid appears first
         plt.ion()  
@@ -40,13 +41,19 @@ class SearchController:
         self.vis.fig.canvas.mpl_connect('close_event', self.on_close)
         
         self.selection_mode = False  # False = normal mode, True = goal selection mode
+        self.obstacle_mode = False   # New mode for adding obstacles
         self.custom_goal = []  # Store the custom goal positions
         self.selection_active = False  # New flag to track if selection is currently active
         
         # Add a button to toggle selection mode
-        self.select_button_ax = self.vis.fig.add_axes([0.4, 0.05, 0.2, 0.075])
+        self.select_button_ax = self.vis.fig.add_axes([0.32, 0.05, 0.16, 0.075])
         self.select_button = Button(self.select_button_ax, "Select Goal")
         self.select_button.on_clicked(self.toggle_selection_mode)
+        
+        # Add a button to toggle obstacle mode
+        self.obstacle_button_ax = self.vis.fig.add_axes([0.52, 0.05, 0.16, 0.075])
+        self.obstacle_button = Button(self.obstacle_button_ax, "Add Obstacles")
+        self.obstacle_button.on_clicked(self.toggle_obstacle_mode)
         
         # Add label for grid size
         label_ax = self.vis.fig.add_axes([0.82, 0.75, 0.15, 0.05])
@@ -155,7 +162,8 @@ class SearchController:
             self.goal_positions, 
             topology,
             max_simultaneous_moves=self.max_simultaneous_moves,
-            min_simultaneous_moves=self.min_simultaneous_moves
+            min_simultaneous_moves=self.min_simultaneous_moves,
+            obstacles=self.obstacles
         )
         
         # Set up button to start search
@@ -180,6 +188,11 @@ class SearchController:
         """Toggle between normal mode and goal selection mode"""
         if self.dragging:  # Don't allow mode switch while dragging
             return
+        
+        # Turn off obstacle mode if it's active
+        if self.obstacle_mode:
+            self.obstacle_mode = False
+            self.obstacle_button.label.set_text("Add Obstacles")
             
         self.selection_mode = not self.selection_mode
         self.selection_active = self.selection_mode
@@ -192,6 +205,7 @@ class SearchController:
             
             # Clear any highlighted goal shape
             self.vis.draw_grid(highlight_goal=False)
+            self.vis.highlight_obstacles(self.obstacles)
         else:
             # Exiting selection mode
             if len(self.custom_goal) == len(self.start_positions):
@@ -202,13 +216,15 @@ class SearchController:
                     self.goal_positions, 
                     self.topology,
                     max_simultaneous_moves=self.max_simultaneous_moves,
-                    min_simultaneous_moves=self.min_simultaneous_moves
+                    min_simultaneous_moves=self.min_simultaneous_moves,
+                    obstacles=self.obstacles
                 )
                 self.select_button.label.set_text("Select Goal")
                 
                 # Update visualization with the new goal shape
                 self.vis.draw_grid()
                 self.vis.highlight_goal_shape(self.goal_positions)
+                self.vis.highlight_obstacles(self.obstacles)
                 self.vis.update_text(f"Custom goal set with {len(self.goal_positions)} blocks", color="green")
                 
                 # Reset search state
@@ -221,34 +237,110 @@ class SearchController:
                 self.selection_mode = True  # Stay in selection mode if invalid
                 self.select_button.label.set_text("Select Goal")
                 self.vis.update_text(f"Invalid goal: Need exactly {len(self.start_positions)} blocks", color="red")
-
-    def on_grid_click(self, event, x, y):
-        """Handle grid cell clicks for goal selection"""
-        if not self.selection_mode or not self.selection_active:
+                
+    def toggle_obstacle_mode(self, event):
+        """Toggle between normal mode and obstacle placement mode"""
+        if self.dragging:  # Don't allow mode switch while dragging
             return
         
+        # Turn off selection mode if it's active
+        if self.selection_mode:
+            self.selection_mode = False
+            self.selection_active = False
+            self.select_button.label.set_text("Select Goal")
+            
+        self.obstacle_mode = not self.obstacle_mode
+        
+        if self.obstacle_mode:
+            # Entering obstacle mode
+            self.obstacle_button.label.set_text("Confirm Obstacles")
+            self.vis.update_text("Click on grid cells to add/remove obstacles", color="orange")
+            
+            # Redraw grid with existing obstacles
+            self.vis.draw_grid()
+            self.vis.highlight_goal_shape(self.goal_positions)
+            self.vis.highlight_obstacles(self.obstacles)
+        else:
+            # Exiting obstacle mode
+            self.obstacle_button.label.set_text("Add Obstacles")
+            
+            # Update agent with new obstacles
+            self.agent = ConnectedMatterAgent(
+                self.grid_size, 
+                self.start_positions, 
+                self.goal_positions, 
+                self.topology,
+                max_simultaneous_moves=self.max_simultaneous_moves,
+                min_simultaneous_moves=self.min_simultaneous_moves,
+                obstacles=self.obstacles
+            )
+            
+            # Update visualization
+            self.vis.draw_grid()
+            self.vis.highlight_goal_shape(self.goal_positions)
+            self.vis.highlight_obstacles(self.obstacles)
+            self.vis.update_text(f"{len(self.obstacles)} obstacles placed", color="green")
+            
+            # Reset search state
+            self.search_completed = False
+            self.vis.animation_started = False
+            self.vis.animation_done = False
+            self.vis.current_step = 0
+            self.vis.path = None
+
+    def on_grid_click(self, event, x, y):
+        """Handle grid cell clicks for goal selection and obstacle placement"""
         pos = (x, y)
         
-        if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
-            if pos in self.custom_goal:
-                # Remove this position
-                self.custom_goal.remove(pos)
-            else:
-                # Add this position if we haven't reached the limit
-                if len(self.custom_goal) < len(self.start_positions):
-                    self.custom_goal.append(pos)
+        # Handle goal selection
+        if self.selection_mode and self.selection_active:
+            if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
+                # Don't allow placing goals on obstacles
+                if pos in self.obstacles:
+                    return
+                
+                if pos in self.custom_goal:
+                    # Remove this position
+                    self.custom_goal.remove(pos)
                 else:
-                    # Replace the first position
-                    self.custom_goal.pop(0)
-                    self.custom_goal.append(pos)
-            
-            # Redraw the grid with current selection
-            self.vis.draw_grid(highlight_goal=False)
-            for cell_pos in self.custom_goal:
-                self.highlight_cell(cell_pos, color='green')
-            
-            # Update the counter
-            self.vis.update_text(f"Selected {len(self.custom_goal)}/{len(self.start_positions)} blocks", color="blue")
+                    # Add this position if we haven't reached the limit
+                    if len(self.custom_goal) < len(self.start_positions):
+                        self.custom_goal.append(pos)
+                    else:
+                        # Replace the first position
+                        self.custom_goal.pop(0)
+                        self.custom_goal.append(pos)
+                
+                # Redraw the grid with current selection
+                self.vis.draw_grid(highlight_goal=False)
+                for cell_pos in self.custom_goal:
+                    self.highlight_cell(cell_pos, color='green')
+                self.vis.highlight_obstacles(self.obstacles)
+                
+                # Update the counter
+                self.vis.update_text(f"Selected {len(self.custom_goal)}/{len(self.start_positions)} blocks", color="blue")
+        
+        # Handle obstacle placement
+        elif self.obstacle_mode:
+            if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
+                # Don't allow placing obstacles on start positions or goal positions
+                if pos in self.start_positions or pos in self.goal_positions:
+                    return
+                    
+                if pos in self.obstacles:
+                    # Remove this obstacle
+                    self.obstacles.remove(pos)
+                else:
+                    # Add this obstacle
+                    self.obstacles.add(pos)
+                
+                # Redraw the grid with current obstacles
+                self.vis.draw_grid()
+                self.vis.highlight_goal_shape(self.goal_positions)
+                self.vis.highlight_obstacles(self.obstacles)
+                
+                # Update the counter
+                self.vis.update_text(f"{len(self.obstacles)} obstacles placed", color="orange")
     
     def highlight_cell(self, pos, color='green'):
         """Highlight a grid cell with the specified color"""
@@ -279,7 +371,8 @@ class SearchController:
             self.goal_positions, 
             self.topology,
             max_simultaneous_moves=self.max_simultaneous_moves,
-            min_simultaneous_moves=self.min_simultaneous_moves
+            min_simultaneous_moves=self.min_simultaneous_moves,
+            obstacles=self.obstacles
         )
         
         print(f"Selected shape: {self.current_shape}")
@@ -295,6 +388,7 @@ class SearchController:
         # Update visualization with highlighted goal shape
         self.vis.draw_grid()
         self.vis.highlight_goal_shape(self.goal_positions)
+        self.vis.highlight_obstacles(self.obstacles)
         self.vis.button.label.set_text("Search")
         self.vis.update_text(f"Selected {self.current_shape} shape", color="blue")
 
@@ -307,12 +401,21 @@ class SearchController:
 
     def run_search(self, event):
         """Runs the search when the Search button is clicked."""
+        # Clear any selection or obstacle mode
+        self.selection_mode = False
+        self.selection_active = False
+        self.obstacle_mode = False
+        self.select_button.label.set_text("Select Goal")
+        self.obstacle_button.label.set_text("Add Obstacles")
+        
         # Clear goal shape highlight
         self.vis.draw_grid()
+        self.vis.highlight_obstacles(self.obstacles)
         self.vis.update_text("Searching for a path...", color="red")
         plt.pause(1)  # Force update to show "Searching..." before search starts
         
         print("\nSearching for optimal path with connectivity constraint...")
+        print(f"Avoiding {len(self.obstacles)} obstacles")
         start_time = time.time()
         path = self.agent.search(self.time_limit)
         search_time = time.time() - start_time
@@ -351,7 +454,8 @@ class SearchController:
             self.goal_positions, 
             self.topology,
             max_simultaneous_moves=self.max_simultaneous_moves,
-            min_simultaneous_moves=self.min_simultaneous_moves
+            min_simultaneous_moves=self.min_simultaneous_moves,
+            obstacles=self.obstacles
         )
         
         # Reset search state
@@ -379,7 +483,8 @@ class SearchController:
             self.goal_positions, 
             self.topology,
             max_simultaneous_moves=self.max_simultaneous_moves,
-            min_simultaneous_moves=self.min_simultaneous_moves
+            min_simultaneous_moves=self.min_simultaneous_moves,
+            obstacles=self.obstacles
         )
         
         # Reset search state
@@ -413,6 +518,9 @@ class SearchController:
             # Update grid size
             self.grid_size = (n, n)
             
+            # Clear obstacles when resizing grid
+            self.obstacles = set()
+            
             # Update text box to show clean number
             self.grid_text_box.set_val(str(n))
             
@@ -423,7 +531,8 @@ class SearchController:
                 self.goal_positions, 
                 self.topology,
                 max_simultaneous_moves=self.max_simultaneous_moves,
-                min_simultaneous_moves=self.min_simultaneous_moves
+                min_simultaneous_moves=self.min_simultaneous_moves,
+                obstacles=self.obstacles
             )
             
             # Update visualization
@@ -449,12 +558,12 @@ class SearchController:
         # Convert click coordinates to grid cell
         x, y = int(event.ydata), int(event.xdata)
         
-        # Handle selection mode separately from dragging
-        if self.selection_mode and self.selection_active:
+        # Handle selection and obstacle modes separately
+        if (self.selection_mode and self.selection_active) or self.obstacle_mode:
             self.on_grid_click(event, x, y)
             return
         
-        # Only allow dragging when not in selection mode
+        # Only allow dragging when not in selection or obstacle mode
         click_pos = (x, y)
         
         # Check if click is within the goal shape
@@ -510,11 +619,13 @@ class SearchController:
                         self.goal_positions, 
                         self.topology,
                         max_simultaneous_moves=self.max_simultaneous_moves,
-                        min_simultaneous_moves=self.min_simultaneous_moves
+                        min_simultaneous_moves=self.min_simultaneous_moves,
+                        obstacles=self.obstacles
                     )
                     self.search_completed = False
                     self.vis.draw_grid()
                     self.vis.highlight_goal_shape(self.goal_positions)
+                    self.vis.highlight_obstacles(self.obstacles)
                     self.vis.update_text("Goal shape moved", color="blue")
     
     def constrain_to_boundaries(self, x, y):

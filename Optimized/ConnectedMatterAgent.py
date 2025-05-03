@@ -4,13 +4,14 @@ import matplotlib.pyplot as plt
 from collections import deque
 
 class ConnectedMatterAgent:
-    def __init__(self, grid_size, start_positions, goal_positions, topology="moore", max_simultaneous_moves=1, min_simultaneous_moves=1):
+    def __init__(self, grid_size, start_positions, goal_positions, topology="moore", max_simultaneous_moves=1, min_simultaneous_moves=1, obstacles=None):
         self.grid_size = grid_size
         self.start_positions = list(start_positions)
         self.goal_positions = list(goal_positions)
         self.topology = topology
         self.max_simultaneous_moves = max_simultaneous_moves
         self.min_simultaneous_moves = min(min_simultaneous_moves, max_simultaneous_moves)  # Ensure min <= max
+        self.obstacles = set(obstacles) if obstacles else set()
         
         # Set moves based on topology
         if self.topology == "moore":
@@ -35,7 +36,7 @@ class ConnectedMatterAgent:
         
         # Enhanced parameters for improved search
         self.beam_width = 500  # Increased beam width for better exploration
-        self.max_iterations = 10000  # Limit iterations to prevent infinite loops
+        self.max_iterations = 100000  # Limit iterations to prevent infinite loops
         
     def calculate_centroid(self, positions):
         """Calculate the centroid (average position) of a set of positions"""
@@ -150,11 +151,12 @@ class ConnectedMatterAgent:
             # Calculate new positions after moving
             new_positions = [(pos[0] + dx, pos[1] + dy) for pos in state_list]
             
-            # Check if all new positions are valid (within bounds and not occupied)
+            # Check if all new positions are valid (within bounds, not occupied by obstacles)
             all_valid = all(0 <= pos[0] < self.grid_size[0] and 
-                            0 <= pos[1] < self.grid_size[1] for pos in new_positions)
+                            0 <= pos[1] < self.grid_size[1] and
+                            pos not in self.obstacles for pos in new_positions)
             
-            # Only consider moves that keep all positions within bounds
+            # Only consider moves that keep all positions within bounds and not overlapping obstacles
             if all_valid:
                 new_state = frozenset(new_positions)
                 valid_moves.append(new_state)
@@ -193,9 +195,13 @@ class ConnectedMatterAgent:
             for dx, dy in self.directions:
                 new_pos = (point[0] + dx, point[1] + dy)
                 
-                # Skip if out of bounds
+                # Skip if out of bounds or is an obstacle
                 if not (0 <= new_pos[0] < self.grid_size[0] and 
                         0 <= new_pos[1] < self.grid_size[1]):
+                    continue
+                    
+                # Skip if position is an obstacle
+                if new_pos in self.obstacles:
                     continue
                 
                 # Skip if already occupied
@@ -312,9 +318,13 @@ class ConnectedMatterAgent:
             # Try moving in that direction
             next_pos = (pos[0] + dx, pos[1] + dy)
             
-            # Skip if out of bounds
+            # Skip if out of bounds or is an obstacle
             if not (0 <= next_pos[0] < self.grid_size[0] and 
                     0 <= next_pos[1] < self.grid_size[1]):
+                continue
+                
+            # Skip if position is an obstacle
+            if next_pos in self.obstacles:
                 continue
             
             # If next position is occupied, try chain move
@@ -323,11 +333,11 @@ class ConnectedMatterAgent:
                 for chain_dx, chain_dy in self.directions:
                     chain_pos = (next_pos[0] + chain_dx, next_pos[1] + chain_dy)
                     
-                    # Skip if out of bounds, occupied, or original position
+                    # Skip if out of bounds, occupied, is an obstacle, or original position
                     if not (0 <= chain_pos[0] < self.grid_size[0] and 
                             0 <= chain_pos[1] < self.grid_size[1]):
                         continue
-                    if chain_pos in state_set or chain_pos == pos:
+                    if chain_pos in state_set or chain_pos == pos or chain_pos in self.obstacles:
                         continue
                     
                     # Create new state by moving both blocks
@@ -377,9 +387,11 @@ class ConnectedMatterAgent:
                     current_pos = pos
                     for _ in range(20):  # Maximum chain length
                         next_pos = (current_pos[0] + dx, current_pos[1] + dy)
-                        # Stop if out of bounds
+                        # Stop if out of bounds or is an obstacle
                         if not (0 <= next_pos[0] < self.grid_size[0] and 
                                 0 <= next_pos[1] < self.grid_size[1]):
+                            break
+                        if next_pos in self.obstacles:
                             break
                         path.append(next_pos)
                         current_pos = next_pos
