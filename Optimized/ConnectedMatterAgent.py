@@ -1338,63 +1338,198 @@ class ConnectedMatterAgent:
     def assign_blocks_to_components(self, state):
         """
         Returns a dictionary mapping each component index to a set of positions
+        Ensures blocks assigned to the same component are adjacent
         """
-        assignments = {i: set() for i in range(len(self.goal_components))}
-        state_positions = list(state)
+        state_set = set(state)
         
-        # Create a dictionary to track assigned positions
-        assigned = set()
-        
-        # First, count how many blocks we need for each component
+        # Count blocks needed for each component
         component_sizes = [len(comp) for comp in self.goal_components]
         total_blocks_needed = sum(component_sizes)
         
-        # Ensure we have enough blocks
-        if len(state_positions) < total_blocks_needed:
-            print(f"Warning: Not enough blocks ({len(state_positions)}) for goal state ({total_blocks_needed})")
+        # Check if we have enough blocks
+        if len(state_set) < total_blocks_needed:
+            print(f"Warning: Not enough blocks ({len(state_set)}) for goal state ({total_blocks_needed})")
             return None
-            
-        # Calculate distance from each block to each component centroid
-        distances = []
-        for pos in state_positions:
-            pos_distances = []
-            for idx, centroid in enumerate(self.component_centroids):
-                if self.obstacles:
-                    dist = self.obstacle_aware_distance(pos, (int(centroid[0]), int(centroid[1])))
-                else:
-                    dist = abs(pos[0] - centroid[0]) + abs(pos[1] - centroid[1])
-                pos_distances.append((idx, dist))
-            distances.append((pos, sorted(pos_distances, key=lambda x: x[1])))
-            
-        # Sort blocks by their distance to their closest component
-        distances.sort(key=lambda x: x[1][0][1])
         
-        # Assign blocks to components in order of increasing distance
-        for pos, component_distances in distances:
-            for component_idx, dist in component_distances:
-                if len(assignments[component_idx]) < len(self.goal_components[component_idx]) and pos not in assigned:
-                    assignments[component_idx].add(pos)
-                    assigned.add(pos)
-                    break
+        # Find connected subgroups within the current state
+        current_clusters = self.find_connected_clusters(state_set)
+        print(f"Current state has {len(current_clusters)} connected clusters")
+        
+        # Sort components by size (descending)
+        component_indices = list(range(len(self.goal_components)))
+        component_indices.sort(key=lambda i: len(self.goal_components[i]), reverse=True)
+        
+        # Sort clusters by size (descending)
+        current_clusters.sort(key=len, reverse=True)
+        
+        # Match clusters to components based on size and proximity
+        assignments = {i: set() for i in range(len(self.goal_components))}
+        used_clusters = set()
+        
+        # First pass: Match large clusters to components
+        for idx in component_indices:
+            component = self.goal_components[idx]
+            component_size = len(component)
+            component_centroid = self.component_centroids[idx]
+            
+            # Find best cluster for this component
+            best_cluster_idx = -1
+            best_distance = float('inf')
+            
+            for i, cluster in enumerate(current_clusters):
+                if i in used_clusters:
+                    continue
                     
-        # Ensure all blocks are assigned
-        unassigned = set(state_positions) - assigned
-        if unassigned:
-            # Assign remaining blocks to components that still need them
-            for pos in unassigned:
-                for component_idx in range(len(self.goal_components)):
-                    if len(assignments[component_idx]) < len(self.goal_components[component_idx]):
-                        assignments[component_idx].add(pos)
-                        assigned.add(pos)
-                        break
-                        
-        # Double-check that we've assigned the right number of blocks to each component
+                # Only consider clusters that are big enough or almost big enough
+                if len(cluster) < component_size * 0.7:  # Allow some flexibility
+                    continue
+                    
+                cluster_centroid = self.calculate_centroid(cluster)
+                distance = abs(cluster_centroid[0] - component_centroid[0]) + abs(cluster_centroid[1] - component_centroid[1])
+                
+                if distance < best_distance:
+                    best_distance = distance
+                    best_cluster_idx = i
+            
+            if best_cluster_idx != -1:
+                # Assign this cluster to the component
+                used_clusters.add(best_cluster_idx)
+                assignments[idx] = current_clusters[best_cluster_idx]
+        
+        # Second pass: Handle remaining components
+        remaining_blocks = state_set.copy()
+        for assigned_blocks in assignments.values():
+            remaining_blocks -= assigned_blocks
+        
+        # For components that didn't get a cluster
+        for idx in component_indices:
+            if not assignments[idx]:
+                component_size = len(self.goal_components[idx])
+                component_centroid = self.component_centroids[idx]
+                
+                # Try to find a connected subset of remaining blocks
+                if remaining_blocks:
+                    # Start with block closest to component centroid
+                    start_block = min(remaining_blocks, 
+                                     key=lambda pos: abs(pos[0] - component_centroid[0]) + abs(pos[1] - component_centroid[1]))
+                    
+                    # Grow the cluster using BFS
+                    component_blocks = self.grow_connected_cluster(start_block, remaining_blocks, component_size)
+                    
+                    # Assign these blocks
+                    assignments[idx] = component_blocks
+                    remaining_blocks -= component_blocks
+        
+        # Final pass: Ensure every component has the right number of blocks
+        for idx in component_indices:
+            component_size = len(self.goal_components[idx])
+            
+            # If too few blocks, add from remaining
+            while len(assignments[idx]) < component_size and remaining_blocks:
+                # Add block closest to existing assignment
+                if assignments[idx]:
+                    # Find block closest to the current assignment
+                    best_block = self.find_closest_block_to_cluster(assignments[idx], remaining_blocks)
+                else:
+                    # Or closest to component centroid if nothing assigned yet
+                    component_centroid = self.component_centroids[idx]
+                    best_block = min(remaining_blocks, 
+                                    key=lambda pos: abs(pos[0] - component_centroid[0]) + abs(pos[1] - component_centroid[1]))
+                
+                assignments[idx].add(best_block)
+                remaining_blocks.remove(best_block)
+                
+            # If too many blocks, remove furthest ones
+            while len(assignments[idx]) > component_size:
+                component_centroid = self.component_centroids[idx]
+                # Find furthest block from component centroid
+                furthest_block = max(assignments[idx], 
+                                  key=lambda pos: abs(pos[0] - component_centroid[0]) + abs(pos[1] - component_centroid[1]))
+                
+                assignments[idx].remove(furthest_block)
+                remaining_blocks.add(furthest_block)
+        
+        # Verify assignments
         for idx, component in enumerate(self.goal_components):
             if len(assignments[idx]) != len(component):
-                print(f"Warning: Component {idx} has {len(assignments[idx])} blocks assigned but needs {len(component)}")
-                
+                print(f"Warning: Component {idx} has {len(assignments[idx])} blocks but needs {len(component)}")
+        
         return assignments
-    
+
+    def find_connected_clusters(self, positions):
+        """Find all connected clusters of blocks in the current state"""
+        positions_set = set(positions)
+        clusters = []
+        
+        while positions_set:
+            # Start with a random position
+            start = next(iter(positions_set))
+            
+            # Find all connected positions using BFS
+            cluster = set()
+            queue = deque([start])
+            cluster.add(start)
+            positions_set.remove(start)
+            
+            while queue:
+                current = queue.popleft()
+                
+                # Check all adjacent positions
+                for dx, dy in self.directions:
+                    neighbor = (current[0] + dx, current[1] + dy)
+                    if neighbor in positions_set:
+                        cluster.add(neighbor)
+                        positions_set.remove(neighbor)
+                        queue.append(neighbor)
+            
+            clusters.append(cluster)
+        
+        return clusters
+
+    def grow_connected_cluster(self, start_block, available_blocks, target_size):
+        """Grow a connected cluster from a starting block until target size"""
+        if start_block not in available_blocks:
+            return set()
+            
+        cluster = {start_block}
+        frontier = {start_block}
+        available = available_blocks - {start_block}
+        
+        # Grow cluster using BFS until we reach target size or can't grow further
+        while len(cluster) < target_size and frontier:
+            new_frontier = set()
+            
+            for block in frontier:
+                # Check all neighbors
+                for dx, dy in self.directions:
+                    neighbor = (block[0] + dx, block[1] + dy)
+                    if neighbor in available:
+                        new_frontier.add(neighbor)
+                        cluster.add(neighbor)
+                        available.remove(neighbor)
+                        
+                        if len(cluster) == target_size:
+                            return cluster
+            
+            frontier = new_frontier
+        
+        return cluster
+
+    def find_closest_block_to_cluster(self, cluster, available_blocks):
+        """Find block from available blocks that's closest to any block in the cluster"""
+        min_distance = float('inf')
+        closest_block = None
+        
+        for block in available_blocks:
+            # Find minimum distance to any block in cluster
+            for cluster_block in cluster:
+                dist = abs(block[0] - cluster_block[0]) + abs(block[1] - cluster_block[1])
+                if dist < min_distance:
+                    min_distance = dist
+                    closest_block = block
+        
+        return closest_block
+   
     def plan_disconnect_moves(self, state, assignments):
         """
         Plan a sequence of moves to disconnect the shape into separate components
@@ -1408,7 +1543,56 @@ class ConnectedMatterAgent:
         component_positions = [set(assignments[i]) for i in range(len(self.goal_components))]
         
         # Check if the state is already naturally separable
-        is_separable = True
+        is_separable = self.check_if_separable(component_positions)
+        
+        # If already separable, return current state
+        if is_separable:
+            print("State is already naturally separable into components")
+            return path
+            
+        # Find critical connection points between components
+        connection_points = self.find_connection_points(component_positions)
+        print(f"Identified {len(connection_points)} connection points between components")
+        
+        # For each connection point, plan a move to disconnect
+        for point, connected_components in connection_points.items():
+            # Try to move the block to maintain connectivity within its own component
+            # but break connection with the other component
+            source_component = None
+            for idx, comp in enumerate(component_positions):
+                if point in comp:
+                    source_component = idx
+                    break
+            
+            if source_component is None:
+                continue
+                
+            # Find viable moves that maintain internal connectivity but break external
+            viable_moves = self.find_disconnection_moves(current_state, point, component_positions, source_component)
+            
+            if viable_moves:
+                # Apply the best move
+                best_move = viable_moves[0]  # First move in sorted list
+                new_state = current_state.copy()
+                new_state.remove(point)
+                new_state.add(best_move)
+                
+                # Update component positions
+                component_positions[source_component].remove(point)
+                component_positions[source_component].add(best_move)
+                
+                # Add to path
+                current_state = new_state
+                path.append(frozenset(current_state))
+                
+                # Check if we've achieved separation
+                if self.check_if_separable(component_positions):
+                    print("Components successfully separated")
+                    break
+        return path
+    
+    def check_if_separable(self, component_positions):
+        """Check if components are already separated (no direct connections)"""
         for i in range(len(component_positions)):
             for j in range(i+1, len(component_positions)):
                 # Check if there's a direct connection between components
@@ -1416,40 +1600,83 @@ class ConnectedMatterAgent:
                     for pos_j in component_positions[j]:
                         # Check if positions are adjacent
                         if any((pos_i[0] + dx, pos_i[1] + dy) == pos_j for dx, dy in self.directions):
-                            is_separable = False
-                            break
-                    if not is_separable:
-                        break
-                if not is_separable:
-                    break
-            if not is_separable:
-                break
-                
-        # If already separable, return current state
-        if is_separable:
-            print("State is already naturally separable into components")
-            return path
-            
-        # Find minimal set of points that connect the components
-        connection_points = set()
+                            return False
+        return True
+    
+    def find_connection_points(self, component_positions):
+        """Find points that connect different components"""
+        connection_points = {}
+        
         for i in range(len(component_positions)):
             for j in range(i+1, len(component_positions)):
-                # Find all connections between components i and j
+                # Check all pairs of blocks between components
                 for pos_i in component_positions[i]:
                     for pos_j in component_positions[j]:
                         # Check if positions are adjacent
                         if any((pos_i[0] + dx, pos_i[1] + dy) == pos_j for dx, dy in self.directions):
-                            # Add both positions to connection points
-                            connection_points.add(pos_i)
-                            connection_points.add(pos_j)
+                            # Add both points to connection dictionary
+                            if pos_i not in connection_points:
+                                connection_points[pos_i] = set()
+                            if pos_j not in connection_points:
+                                connection_points[pos_j] = set()
+                                
+                            connection_points[pos_i].add(j)
+                            connection_points[pos_j].add(i)
         
-        # For theoretical disconnection, we don't need to actually move blocks
-        # Just mark the connection points as if they're disconnected
-        print(f"Identified {len(connection_points)} connection points for theoretical disconnection")
+        return connection_points
+    
+    def find_disconnection_moves(self, state, point, component_positions, source_component):
+        """Find moves for a connection point that maintain internal connectivity but break external connections"""
+        viable_moves = []
+        point_set = {point}
+        state_set = set(state)
         
-        # Return current state as the disconnection plan
-        # The actual disconnection will happen during the morphing phase
-        return path
+        # Get blocks in the same component
+        same_component_blocks = component_positions[source_component]
+        
+        # Temporarily remove the point to check connectivity
+        temp_component = same_component_blocks - point_set
+        
+        # If removing the point breaks internal connectivity, we can't move it
+        if not self.is_connected(temp_component):
+            return viable_moves
+        
+        # Check each possible direction
+        for dx, dy in self.directions:
+            new_pos = (point[0] + dx, point[1] + dy)
+            
+            # Skip if out of bounds, obstacle, or already occupied
+            if not (0 <= new_pos[0] < self.grid_size[0] and 0 <= new_pos[1] < self.grid_size[1]):
+                continue
+            if new_pos in self.obstacles or new_pos in state_set:
+                continue
+                
+            # Check if this move would break external connections
+            would_break_connection = True
+            for other_comp_idx in range(len(component_positions)):
+                if other_comp_idx == source_component:
+                    continue
+                    
+                # If new position is adjacent to other component, it doesn't break connection
+                for other_comp_pos in component_positions[other_comp_idx]:
+                    if any((new_pos[0] + ndx, new_pos[1] + ndy) == other_comp_pos for ndx, ndy in self.directions):
+                        would_break_connection = False
+                        break
+                
+                if not would_break_connection:
+                    break
+            
+            # Check if this move maintains connectivity within the component
+            new_component = temp_component | {new_pos}
+            if self.is_connected(new_component) and would_break_connection:
+                # Calculate distance to component centroid for priority
+                component_centroid = self.calculate_centroid(same_component_blocks)
+                dist = abs(new_pos[0] - component_centroid[0]) + abs(new_pos[1] - component_centroid[1])
+                viable_moves.append((new_pos, dist))
+        
+        # Sort by distance to component centroid
+        viable_moves.sort(key=lambda x: x[1])
+        return [move for move, _ in viable_moves]
     
     def component_morphing_heuristic(self, state, goal_component):
         """
@@ -1632,9 +1859,9 @@ class ConnectedMatterAgent:
         start_time = time.time()
 
         # Allocate time for different phases
-        move_time_ratio = 0.2  # 20% for block movement
-        disconnect_time_ratio = 0.15  # 10% for disconnection planning
-        morphing_time_ratio = 0.65  # 70% for morphing
+        move_time_ratio = 0.2
+        disconnect_time_ratio = 0.2  # Increased for better disconnection planning
+        morphing_time_ratio = 0.6
 
         # Adjust ratios if obstacles are present
         if len(self.obstacles) > 0:
@@ -1751,7 +1978,7 @@ class ConnectedMatterAgent:
         if not self.is_full_disconnected_goal_reached(combined_path[-1]):
             print("WARNING: Final state does not match all goal components. Returning incomplete solution.")
             # Optionally, return None or the best partial path
-            return None
+            return combined_path
         # --- END BLOCK ---
 
         return combined_path
