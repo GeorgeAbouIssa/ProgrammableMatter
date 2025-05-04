@@ -377,22 +377,11 @@ class ConnectedMatterAgent:
         
         return True
     
-    def validate_state_block_count(self, state, original_count=None):
-        """Validates a state has the correct number of blocks"""
-        if original_count is None:
-            original_count = len(self.start_state)
-            
-        if len(state) != original_count:
-            print(f"BLOCK COUNT ERROR: Found {len(state)} blocks, expected {original_count}")
-            return False
-        return True
-        
     def _apply_moves(self, state_set, moves):
-        """Apply a list of moves to the state with strict block count validation"""
-        original_count = len(state_set)
+        """Apply a list of moves to the state"""
         new_state = state_set.copy()
         
-        # First validate that we won't have any overlaps
+        # NEW: First validate that we won't have any overlaps
         sources = set()
         targets = set()
         
@@ -404,25 +393,20 @@ class ConnectedMatterAgent:
         # 1. No target should overlap with a non-moving block
         non_moving_blocks = state_set - sources
         if targets.intersection(non_moving_blocks):
-            print("WARNING: Move would cause overlap with non-moving block")
             return state_set  # Return original state if overlap detected
             
         # 2. No duplicate targets
         if len(targets) != len(moves):
-            print("WARNING: Move would cause duplicate positions")
             return state_set  # Return original state if duplicate targets
         
         # Apply moves only if valid
         for src, tgt in moves:
-            if src in new_state:  # Only remove if the source exists
-                new_state.remove(src)
-                new_state.add(tgt)
-            else:
-                print(f"WARNING: Tried to move non-existent block at {src}")
+            new_state.remove(src)
+            new_state.add(tgt)
             
         # Verify we haven't lost any blocks
-        if len(new_state) != original_count:
-            print(f"ERROR: Block count changed from {original_count} to {len(new_state)}")
+        if len(new_state) != len(state_set):
+            print(f"WARNING: Block count changed from {len(state_set)} to {len(new_state)}")
             return state_set  # Return original state if blocks were lost
             
         return new_state
@@ -550,10 +534,7 @@ class ConnectedMatterAgent:
     def get_all_valid_moves(self, state):
         """
         Combine all move generation methods to maximize options
-        With strict validation to prevent block loss
         """
-        original_block_count = len(state)
-        
         # Start with basic morphing moves
         basic_moves = self.get_valid_morphing_moves(state)
         
@@ -566,16 +547,16 @@ class ConnectedMatterAgent:
         # Combine all moves (frozensets automatically handle duplicates)
         all_moves = list(set(basic_moves + chain_moves + sliding_moves))
         
-        # Verify all moves have the correct number of blocks
+        # NEW: Verify all moves have the correct number of blocks
         valid_moves = []
         for move in all_moves:
-            if len(move) == original_block_count:
+            if len(move) == len(state):
                 valid_moves.append(move)
             else:
-                print(f"WARNING: Invalid move with {len(move)} blocks instead of {original_block_count} - REJECTED")
+                print(f"WARNING: Invalid move with {len(move)} blocks instead of {len(state)}")
         
         return valid_moves
-        
+    
     def block_heuristic(self, state):
         """
         Heuristic for block movement phase:
@@ -949,7 +930,7 @@ class ConnectedMatterAgent:
     def search(self, time_limit=30):
         """
         Main search method combining block movement and smarter morphing
-        Now with dynamic time allocation based on obstacles and block count validation
+        Now with dynamic time allocation based on obstacles
         """
         # Build obstacle maze representation if not already done
         if self.obstacles and not self.obstacle_maze:
@@ -980,17 +961,6 @@ class ConnectedMatterAgent:
             print("Block movement phase failed!")
             return None
         
-        # Validate block count in block movement path
-        original_block_count = len(self.start_state)
-        for i, state in enumerate(block_path):
-            if len(state) != original_block_count:
-                print(f"ERROR: Block movement state {i} has {len(state)} blocks instead of {original_block_count}")
-                # Fix the state
-                if i > 0:
-                    block_path[i] = block_path[i-1]
-                else:
-                    block_path[i] = list(self.start_state)
-        
         # Get the final state from block movement phase
         block_final_state = frozenset(block_path[-1])
         
@@ -1004,7 +974,7 @@ class ConnectedMatterAgent:
         # Combine paths (remove duplicate state at transition)
         combined_path = block_path[:-1] + morphing_path
         
-        # Verify block count is consistent throughout the path
+        # NEW: Verify block count is consistent throughout the path
         expected_count = len(self.start_state)
         for i, state in enumerate(combined_path):
             if len(state) != expected_count:
@@ -1014,7 +984,101 @@ class ConnectedMatterAgent:
                     combined_path[i] = combined_path[i-1]
         
         return combined_path
+    
+    def visualize_path(self, path, interval=0.5):
+        """
+        Visualize the path as an animation
+        """
+        if not path:
+            print("No path to visualize")
+            return
         
+        fig, ax = plt.subplots(figsize=(7, 7))
+        plt.ion()  # Turn on interactive mode
+    
+        # Get bounds for plotting
+        min_x, max_x = 0, self.grid_size[0] - 1
+        min_y, max_y = 0, self.grid_size[1] - 1
+    
+        # Show initial state
+        ax.clear()
+        ax.set_xlim(min_x - 0.5, max_x + 0.5)
+        ax.set_ylim(min_y - 0.5, max_y + 0.5)
+        ax.grid(True)
+    
+        # NEW: Track and display blocks at goal positions differently
+        # Draw goal positions (as outlines)
+        goal_rects = []
+        for pos in self.goal_positions:
+            rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, fill=False, edgecolor='green', linewidth=2)
+            ax.add_patch(rect)
+            goal_rects.append(rect)
+    
+        # Draw current positions
+        current_positions = path[0]
+        
+        # NEW: Determine which blocks are at goal positions
+        blocks_at_goal = [pos for pos in current_positions if (pos[0], pos[1]) in self.goal_state]
+        blocks_not_at_goal = [pos for pos in current_positions if (pos[0], pos[1]) not in self.goal_state]
+        
+        # Draw blocks at goal positions (green filled squares)
+        goal_block_rects = []
+        for pos in blocks_at_goal:
+            rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='green', alpha=0.7)
+            ax.add_patch(rect)
+            goal_block_rects.append(rect)
+            
+        # Draw other blocks (blue squares)
+        non_goal_rects = []
+        for pos in blocks_not_at_goal:
+            rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='blue', alpha=0.7)
+            ax.add_patch(rect)
+            non_goal_rects.append(rect)
+        
+        ax.set_title(f"Step 0/{len(path)-1} - {len(blocks_at_goal)} blocks at goal")
+        plt.draw()
+        plt.pause(interval)
+    
+        # Animate the path
+        for i in range(1, len(path)):
+            # NEW: Verify block count is consistent
+            if len(path[i]) != len(path[0]):
+                print(f"Warning: State {i} has {len(path[i])} blocks instead of {len(path[0])}")
+                # If block count is inconsistent, skip this frame
+                continue
+                
+            # Update positions
+            new_positions = path[i]
+        
+            # Clear previous blocks
+            for rect in goal_block_rects + non_goal_rects:
+                rect.remove()
+            
+            # NEW: Determine which blocks are at goal positions
+            blocks_at_goal = [pos for pos in new_positions if (pos[0], pos[1]) in self.goal_state]
+            blocks_not_at_goal = [pos for pos in new_positions if (pos[0], pos[1]) not in self.goal_state]
+            
+            # Draw blocks at goal positions (green filled squares)
+            goal_block_rects = []
+            for pos in blocks_at_goal:
+                rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='green', alpha=0.7)
+                ax.add_patch(rect)
+                goal_block_rects.append(rect)
+                
+            # Draw other blocks (blue squares)
+            non_goal_rects = []
+            for pos in blocks_not_at_goal:
+                rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='blue', alpha=0.7)
+                ax.add_patch(rect)
+                non_goal_rects.append(rect)
+            
+            ax.set_title(f"Step {i}/{len(path)-1} - {len(blocks_at_goal)} blocks at goal")
+            plt.draw()
+            plt.pause(interval)
+    
+        plt.ioff()  # Turn off interactive mode
+        plt.show(block=True)
+    
     def build_obstacle_maze(self):
         """Create a grid representation with obstacles for pathfinding"""
         self.obstacle_maze = [[0 for _ in range(self.grid_size[1])] for _ in range(self.grid_size[0])]
@@ -1277,7 +1341,6 @@ class ConnectedMatterAgent:
         Ensures blocks assigned to the same component are adjacent
         """
         state_set = set(state)
-        original_block_count = len(state_set)
         
         # Count blocks needed for each component
         component_sizes = [len(comp) for comp in self.goal_components]
@@ -1386,31 +1449,13 @@ class ConnectedMatterAgent:
                 assignments[idx].remove(furthest_block)
                 remaining_blocks.add(furthest_block)
         
-        # Final validation: ensure ALL blocks are assigned and none are missing
-        total_assigned = sum(len(assignments[idx]) for idx in range(len(self.goal_components)))
-        if total_assigned != original_block_count:
-            print(f"ERROR: Assignment lost blocks! Original: {original_block_count}, Assigned: {total_assigned}")
-            # Emergency fix: add any missing blocks to the largest component
-            if total_assigned < original_block_count:
-                largest_component_idx = max(range(len(self.goal_components)), 
-                                           key=lambda i: len(self.goal_components[i]))
-                
-                # Find missing blocks
-                all_assigned = set()
-                for blocks in assignments.values():
-                    all_assigned.update(blocks)
-                    
-                missing_blocks = state_set - all_assigned
-                print(f"Adding {len(missing_blocks)} missing blocks to component {largest_component_idx}")
-                assignments[largest_component_idx].update(missing_blocks)
-        
         # Verify assignments
         for idx, component in enumerate(self.goal_components):
             if len(assignments[idx]) != len(component):
                 print(f"Warning: Component {idx} has {len(assignments[idx])} blocks but needs {len(component)}")
         
         return assignments
-    
+
     def find_connected_clusters(self, positions):
         """Find all connected clusters of blocks in the current state"""
         positions_set = set(positions)
@@ -1492,7 +1537,6 @@ class ConnectedMatterAgent:
         """
         # Start with current state
         current_state = set(state)
-        original_block_count = len(current_state)
         path = [frozenset(current_state)]
         
         # Group the assignments by component
@@ -1533,11 +1577,6 @@ class ConnectedMatterAgent:
                 new_state.remove(point)
                 new_state.add(best_move)
                 
-                # Verify block count is preserved
-                if len(new_state) != original_block_count:
-                    print(f"ERROR: Disconnection move lost blocks! Was {original_block_count}, now {len(new_state)}")
-                    continue  # Skip this move
-                
                 # Update component positions
                 component_positions[source_component].remove(point)
                 component_positions[source_component].add(best_move)
@@ -1550,15 +1589,8 @@ class ConnectedMatterAgent:
                 if self.check_if_separable(component_positions):
                     print("Components successfully separated")
                     break
-        
-        # Final validation
-        if len(current_state) != original_block_count:
-            print(f"WARNING: Disconnection phase ended with {len(current_state)} blocks instead of {original_block_count}")
-            # Restore the original state
-            return [frozenset(state)]
-            
         return path
-        
+    
     def check_if_separable(self, component_positions):
         """Check if components are already separated (no direct connections)"""
         for i in range(len(component_positions)):
@@ -1645,7 +1677,7 @@ class ConnectedMatterAgent:
         # Sort by distance to component centroid
         viable_moves.sort(key=lambda x: x[1])
         return [move for move, _ in viable_moves]
-        
+    
     def component_morphing_heuristic(self, state, goal_component):
         """
         Heuristic for morphing a specific component
@@ -1946,7 +1978,7 @@ class ConnectedMatterAgent:
         if not self.is_full_disconnected_goal_reached(combined_path[-1]):
             print("WARNING: Final state does not match all goal components. Returning incomplete solution.")
             # Optionally, return None or the best partial path
-            return combined_path  
+            return combined_path
         # --- END BLOCK ---
 
         return combined_path
