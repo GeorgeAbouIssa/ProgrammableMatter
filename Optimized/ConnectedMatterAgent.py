@@ -1946,7 +1946,7 @@ class ConnectedMatterAgent:
         if not self.is_full_disconnected_goal_reached(combined_path[-1]):
             print("WARNING: Final state does not match all goal components. Returning incomplete solution.")
             # Optionally, return None or the best partial path
-            return None  
+            return combined_path  
         # --- END BLOCK ---
 
         return combined_path
