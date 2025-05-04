@@ -1691,17 +1691,90 @@ class ConnectedMatterAgent:
             for comp in self.goal_components
         ]
 
-        # Initialize component_paths here to avoid reference before assignment
+        # Add shared resources for thread coordination
+        from threading import Lock
+        shared_grid_lock = Lock()
+        shared_occupied_cells = set()  # Track cells occupied by any component
+        component_locks = [Lock() for _ in range(len(self.goal_components))]
+        component_occupied_cells = [set() for _ in range(len(self.goal_components))]
+        
+        # Initialize shared grid with current occupied cells
+        for i, comp_state in enumerate(component_start_states):
+            component_occupied_cells[i] = set(comp_state)
+            shared_occupied_cells.update(comp_state)
+        
+        # Create wrapper function for thread-safe component morphing
+        def thread_safe_component_morphing(i, start_state, goal_component, time_limit):
+            """Wrapper for thread-safe component morphing with coordination"""
+            # Create a thread-local version of get_all_valid_moves
+            def coordinated_get_valid_moves(state):
+                # Get basic moves without coordination
+                basic_moves = self.get_valid_morphing_moves(state)
+                chain_moves = self.get_smart_chain_moves(state)
+                sliding_moves = self.get_sliding_chain_moves(state)
+                
+                # Combine all moves
+                all_moves = list(set(basic_moves + chain_moves + sliding_moves))
+                
+                # Apply coordination checks
+                valid_moves = []
+                with shared_grid_lock:
+                    # Calculate cells that other components are using
+                    others_occupied = shared_occupied_cells.copy()
+                    for pos in state:
+                        if pos in others_occupied:
+                            others_occupied.remove(pos)
+                    
+                    for move in all_moves:
+                        # Check for conflicts with other components
+                        has_conflict = False
+                        for pos in move:
+                            if pos in others_occupied:
+                                has_conflict = True
+                                break
+                        
+                        if not has_conflict:
+                            valid_moves.append(move)
+                
+                return valid_moves
+            
+            # Temporarily override the get_all_valid_moves method for this thread
+            original_get_all_valid_moves = self.get_all_valid_moves
+            self.get_all_valid_moves = coordinated_get_valid_moves
+            
+            try:
+                # Run the original morphing with our thread-safe version
+                result = self.component_morphing_phase(start_state, goal_component, time_limit)
+                
+                # Update shared grid with final state
+                final_state = result[-1] if result else start_state
+                with shared_grid_lock:
+                    # Remove old positions
+                    for pos in component_occupied_cells[i]:
+                        if pos in shared_occupied_cells:
+                            shared_occupied_cells.remove(pos)
+                    
+                    # Add new positions
+                    shared_occupied_cells.update(final_state)
+                    component_occupied_cells[i] = set(final_state)
+                
+                return result
+            finally:
+                # Restore original method
+                self.get_all_valid_moves = original_get_all_valid_moves
+        
+        # Initialize component_paths
         component_paths = []
     
-        # Use thread pool for parallel morphing
+        # Use thread pool for parallel morphing with coordination
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(self.goal_components)) as executor:
-            # Submit tasks for each component
+            # Submit tasks for each component with our wrapper
             futures = []
             for i in range(len(self.goal_components)):
                 futures.append(
                     executor.submit(
-                        self.component_morphing_phase,
+                        thread_safe_component_morphing,
+                        i,
                         component_start_states[i],
                         self.goal_components[i],
                         component_time_limits[i]
@@ -1746,13 +1819,11 @@ class ConnectedMatterAgent:
             if combined_state:
                 combined_path.append(list(combined_state))
 
-        # --- ADD THIS BLOCK ---
-        # Only accept the solution if all goal components are matched
+        # Check if goal is reached using our more forgiving criterion
         if not self.is_full_disconnected_goal_reached(combined_path[-1]):
             print("WARNING: Final state does not match all goal components. Returning incomplete solution.")
             # Optionally, return None or the best partial path
             return None
-        # --- END BLOCK ---
 
         return combined_path
 
