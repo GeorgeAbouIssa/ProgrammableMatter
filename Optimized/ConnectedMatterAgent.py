@@ -1642,17 +1642,25 @@ class ConnectedMatterAgent:
     def search_disconnected_goal(self, time_limit=100):
         """
         Search method for disconnected goal states:
-        1. Move blocks to strategic position
-        2. Assign blocks to components
-        3. Morph each component in parallel
+        1. First try parallel approach:
+           a. Move blocks to strategic position
+           b. Assign blocks to components
+           c. Morph each component in parallel
+        2. If parallel approach fails, try sequential approach, still using the 
+           strategic position from Phase 1
         """
         print(f"Starting search for disconnected goal with {len(self.goal_components)} components")
         start_time = time.time()
 
+        # Reserve time for sequential approach if needed
+        parallel_time_limit = time_limit * 0.6  # Use 60% of time for parallel approach
+        sequential_time_limit = time_limit * 0.4  # Reserve 40% for sequential if needed
+
+        # Try Approach 1: Parallel processing
         # Allocate time for different phases
         move_time_ratio = 0.2  # 20% for block movement
-        disconnect_time_ratio = 0.15  # 10% for disconnection planning
-        morphing_time_ratio = 0.65  # 70% for morphing
+        disconnect_time_ratio = 0.15  # 15% for disconnection planning
+        morphing_time_ratio = 0.65  # 65% for morphing
 
         # Adjust ratios if obstacles are present
         if len(self.obstacles) > 0:
@@ -1660,9 +1668,9 @@ class ConnectedMatterAgent:
             move_time_ratio = min(0.4, 0.2 + obstacle_density * 0.5)  # Up to 40% for movement
             morphing_time_ratio = 1.0 - move_time_ratio - disconnect_time_ratio
 
-        move_time_limit = time_limit * move_time_ratio
-        disconnect_time_limit = time_limit * disconnect_time_ratio
-        morphing_time_limit = time_limit * morphing_time_ratio
+        move_time_limit = parallel_time_limit * move_time_ratio
+        disconnect_time_limit = parallel_time_limit * disconnect_time_ratio
+        morphing_time_limit = parallel_time_limit * morphing_time_ratio
 
         print(f"Time allocation: {move_time_ratio:.1%} block movement, "
                 f"{disconnect_time_ratio:.1%} disconnection planning, "
@@ -1672,7 +1680,7 @@ class ConnectedMatterAgent:
         block_path = self.disconnected_block_movement_phase(move_time_limit)
 
         if not block_path:
-            print("Block movement phase failed!")
+            print("Block movement phase failed! Cannot continue.")
             return None
 
         # Get the final state from block movement phase
@@ -1839,12 +1847,27 @@ class ConnectedMatterAgent:
 
         # Check if goal is reached using our more forgiving criterion
         if not self.is_full_disconnected_goal_reached(combined_path[-1]):
-            print("WARNING: Final state does not match all goal components. Returning incomplete solution.")
-            # Optionally, return None or the best partial path
-            return None
+            print("Parallel approach failed to reach goal. Trying sequential approach using the same strategic position...")
+            
+            # Try sequential approach starting from the strategic position (from Phase 1)
+            remaining_time = max(10, time_limit - (time.time() - start_time))
+            
+            # Use the sequential approach but starting from the strategic position achieved in Phase 1
+            sequential_path = self.sequential_from_strategic_position(
+                block_final_state, 
+                remaining_time
+            )
+            
+            if sequential_path and len(sequential_path) > 1:
+                # Combine the initial movement with the sequential solving path
+                final_path = block_path[:-1] + sequential_path[1:]
+                print("Sequential approach produced a valid path")
+                return final_path
+            else:
+                print("WARNING: Sequential approach also failed. Returning best available path.")
 
         return combined_path
-
+    
     def is_full_disconnected_goal_reached(self, state):
         """
         Check if goal components are sufficiently matched in the current state.
@@ -1935,3 +1958,634 @@ class ConnectedMatterAgent:
                 all_moves.append(frozenset(new_state))
     
         return all_moves
+    
+    def sequential_from_strategic_position(self, strategic_state, time_limit=60):
+        """
+        Apply the sequential component-by-component approach starting from
+        the strategic position achieved in Phase 1.
+        
+        Args:
+            strategic_state: The state after initial block movement
+            time_limit: Time limit for the sequential approach
+            
+        Returns:
+            List of states representing the path
+        """
+        print(f"Starting sequential approach from strategic position")
+        start_time = time.time()
+
+        # Start with the strategic position
+        current_state = set(strategic_state)
+        
+        # Start building the path
+        combined_path = [list(current_state)]
+
+        # Assign blocks to components
+        print("Assigning blocks to components")
+        assignments = self.assign_blocks_to_components(current_state)
+        if assignments is None:
+            print("Failed to assign blocks to components in sequential approach!")
+            return combined_path
+
+        # Calculate time for component-wise search
+        remaining_time = time_limit - (time.time() - start_time)
+        
+        # Allocate time for each component based on its complexity (size)
+        total_blocks = sum(len(comp) for comp in self.goal_components)
+        component_time_limits = [remaining_time * len(comp) / total_blocks for comp in self.goal_components]
+        
+        # Solve each component sequentially
+        for i, goal_component in enumerate(self.goal_components):
+            print(f"Solving component {i+1}/{len(self.goal_components)} with {len(goal_component)} blocks")
+            
+            # Prepare the component's initial and goal states
+            component_initial = assignments[i]
+            component_goal = goal_component
+            
+            # All other blocks become obstacles
+            other_blocks = current_state - component_initial
+            all_obstacles = self.obstacles.union(other_blocks)
+            
+            # Create a new agent for this component
+            component_agent = ConnectedMatterAgent(
+                grid_size=self.grid_size,
+                start_positions=list(component_initial),
+                goal_positions=list(component_goal),
+                topology=self.topology,
+                max_simultaneous_moves=self.max_simultaneous_moves,
+                min_simultaneous_moves=self.min_simultaneous_moves,
+                obstacles=all_obstacles
+            )
+            
+            # Run a complete search for this component
+            component_time_limit = component_time_limits[i]
+            print(f"  - Time allocated: {component_time_limit:.2f}s")
+            print(f"  - Starting with {len(component_initial)} blocks, targeting {len(component_goal)} positions")
+            print(f"  - Additional obstacles: {len(other_blocks)} (other blocks)")
+            
+            component_path = component_agent.search(component_time_limit)
+            
+            if not component_path:
+                print(f"  - Search failed for component {i+1}")
+                # Try with a fallback approach - just run morphing directly
+                print(f"  - Trying fallback with direct morphing")
+                component_path = component_agent.smarter_morphing_phase(
+                    start_state=frozenset(component_initial),
+                    time_limit=component_time_limit
+                )
+                if not component_path:
+                    print(f"  - Fallback failed for component {i+1}")
+                    continue
+            
+            # Update the current state with the final positions of this component
+            final_component_state = set(component_path[-1])
+            current_state = (current_state - component_initial).union(final_component_state)
+            
+            # Build the combined path by adding the component path
+            # We need to combine the states: keep the positions of blocks not in this component
+            other_blocks_list = list(current_state - final_component_state)
+            
+            # For each state in the component path (except first which is already included)
+            for state in component_path[1:]:
+                # Create a combined state with this component's state and other blocks
+                combined_state = list(state) + other_blocks_list
+                combined_path.append(combined_state)
+            
+            print(f"  - Component {i+1} solved: {len(component_path)-1} moves")
+        
+        # Verify the block count is consistent
+        expected_count = len(strategic_state)
+        for i, state in enumerate(combined_path):
+            if len(state) != expected_count:
+                print(f"WARNING: State {i} has {len(state)} blocks instead of {expected_count}")
+                if i > 0:
+                    # Fix by using previous valid state
+                    combined_path[i] = combined_path[i-1]
+        
+        # Check if we have a valid solution
+        final_match = self.is_full_disconnected_goal_reached(combined_path[-1])
+        
+        # NEW: If goal not reached, try cleanup phase
+        if not final_match:
+            print("Sequential approach failed to reach goal. Trying cleanup phase...")
+            remaining_time = max(5, time_limit - (time.time() - start_time))
+            cleanup_path = self.cleanup_and_retry(combined_path[-1], remaining_time)
+            
+            if cleanup_path and len(cleanup_path) > 1:
+                # Combine the existing path with the cleanup path
+                combined_path.extend(cleanup_path[1:])  # Skip the first state which is already in combined_path
+                
+                # Check if the goal is now reached
+                final_match = self.is_full_disconnected_goal_reached(combined_path[-1])
+                print(f"After cleanup phase, goal {'reached' if final_match else 'still not reached'}")
+        else:
+            print("Sequential approach succeeded in reaching goal state")
+        
+        return combined_path
+    
+    def cleanup_and_retry(self, current_state, time_limit=20):
+        """
+        Cleanup phase with strict block count verification.
+        
+        Args:
+            current_state: Current state after sequential approach
+            time_limit: Time limit for the cleanup phase
+            
+        Returns:
+            List of states representing the additional path
+        """
+        print("Starting cleanup phase...")
+        start_time = time.time()
+        
+        # Store original block count for verification
+        original_block_count = len(current_state)
+        print(f"Original block count: {original_block_count}")
+        
+        # Convert to set for easier operations
+        current_state_set = set(current_state)
+        
+        # Identify blocks that are at goal positions
+        blocks_at_goal = current_state_set.intersection(self.goal_state)
+        
+        # Identify blocks that are not at goal positions
+        blocks_not_at_goal = current_state_set - blocks_at_goal
+        
+        # Identify unfilled goal positions
+        unfilled_goals = set(self.goal_state) - blocks_at_goal
+        
+        # If all goals are filled or no blocks are available, nothing to clean up
+        if not unfilled_goals or not blocks_not_at_goal:
+            print("No cleanup needed or possible")
+            return [current_state]
+        
+        print(f"Found {len(blocks_at_goal)} blocks at goal positions and {len(blocks_not_at_goal)} blocks to reconnect")
+        print(f"Unfilled goals: {len(unfilled_goals)}")
+        
+        # Start building the path
+        cleanup_path = [list(current_state)]
+        
+        # Step 1: Find disconnected clusters of blocks not at goal positions
+        clusters = self.find_disconnected_components(blocks_not_at_goal)
+        
+        if not clusters:
+            print("No clusters found")
+            return cleanup_path
+            
+        print(f"Found {len(clusters)} disconnected clusters of blocks not at goal positions")
+        
+        # If only one cluster, no need to reconnect
+        if len(clusters) == 1:
+            print("Only one cluster found, skipping reconnection")
+            non_goal_cluster = set(clusters[0])
+        else:
+            # Step 2: Calculate which cluster is closest to unfilled goals
+            cluster_distances = []
+            
+            for i, cluster in enumerate(clusters):
+                # Calculate minimum distance from this cluster to any unfilled goal
+                min_distance = float('inf')
+                
+                for block in cluster:
+                    for goal in unfilled_goals:
+                        dist = abs(block[0] - goal[0]) + abs(block[1] - goal[1])
+                        if dist < min_distance:
+                            min_distance = dist
+                
+                # Store the minimum distance for this cluster
+                cluster_distances.append((i, min_distance))
+            
+            # Sort clusters by distance to unfilled goals
+            cluster_distances.sort(key=lambda x: x[1])
+            
+            # The closest cluster is our anchor
+            anchor_idx = cluster_distances[0][0]
+            print(f"Cluster {anchor_idx} is closest to unfilled goals (distance: {cluster_distances[0][1]})")
+            
+            # Use simplified reconnection approach with strict block count verification
+            non_goal_cluster = self.reconnect_clusters_strict(
+                clusters, cluster_distances, current_state, blocks_at_goal, 
+                cleanup_path, original_block_count
+            )
+        
+        # Step 4: Now we have one connected component of non-goal blocks
+        # Try to form the goal shape with this structure
+        print(f"Moving {len(non_goal_cluster)} connected blocks toward goal positions")
+        
+        # Identify unfilled goals that our non-goal blocks should try to fill
+        target_goals = list(unfilled_goals)[:len(non_goal_cluster)]
+        
+        # Create a new agent to solve the formation of the goal shape
+        goal_agent = ConnectedMatterAgent(
+            grid_size=self.grid_size,
+            start_positions=list(non_goal_cluster),
+            goal_positions=target_goals,
+            topology=self.topology,
+            max_simultaneous_moves=self.max_simultaneous_moves,
+            min_simultaneous_moves=self.min_simultaneous_moves,
+            obstacles=self.obstacles.union(blocks_at_goal)
+        )
+        
+        # Run the solver with remaining time
+        remaining_time = max(3, time_limit - (time.time() - start_time))
+        
+        # First try connected movement using the built-in agent
+        try:
+            print(f"Attempting goal formation with {remaining_time:.1f} seconds remaining")
+            goal_path = []
+            
+            # Use morphing which maintains connectivity
+            goal_path = goal_agent.smarter_morphing_phase(
+                start_state=frozenset(non_goal_cluster),
+                time_limit=remaining_time
+            )
+            
+            # If we found a valid path, combine it with the fixed blocks
+            if goal_path and len(goal_path) > 1:
+                print(f"Goal shape formation successful with {len(goal_path)-1} additional steps")
+                
+                # Get the initial blocks that are at goal positions
+                initial_blocks_at_goal = blocks_at_goal.copy()
+                
+                # Combine each state with fixed blocks and verify block count
+                for i, state in enumerate(goal_path[1:], 1):  # Skip first state
+                    # Verify that the state has the correct number of blocks
+                    if len(state) + len(initial_blocks_at_goal) != original_block_count:
+                        print(f"WARNING: Incorrect block count in goal path state {i}")
+                        print(f"Expected {original_block_count}, got {len(state) + len(initial_blocks_at_goal)}")
+                        
+                        # Fix the state to have the correct number of blocks
+                        # If short, add blocks from previous state
+                        if len(state) + len(initial_blocks_at_goal) < original_block_count:
+                            prev_state = set(goal_path[i-1]) if i > 1 else set(non_goal_cluster)
+                            missing = original_block_count - (len(state) + len(initial_blocks_at_goal))
+                            extra_blocks = list(prev_state - set(state))[:missing]
+                            state = set(state).union(extra_blocks)
+                        # If too many, remove blocks furthest from goals
+                        elif len(state) + len(initial_blocks_at_goal) > original_block_count:
+                            excess = (len(state) + len(initial_blocks_at_goal)) - original_block_count
+                            # Sort blocks by distance to goals and remove furthest ones
+                            distance_to_goals = {}
+                            for block in state:
+                                min_dist = min(abs(block[0] - goal[0]) + abs(block[1] - goal[1]) 
+                                               for goal in target_goals)
+                                distance_to_goals[block] = min_dist
+                            
+                            blocks_to_remove = sorted(state, key=lambda b: -distance_to_goals[b])[:excess]
+                            state = set(state) - set(blocks_to_remove)
+                    
+                    # Create the combined state
+                    combined_state = list(initial_blocks_at_goal.union(state))
+                    
+                    # Final verification
+                    assert len(combined_state) == original_block_count, f"Block count mismatch: {len(combined_state)} != {original_block_count}"
+                    
+                    cleanup_path.append(combined_state)
+            else:
+                print("Failed to form goal shape")
+        except Exception as e:
+            print(f"Error in goal formation: {str(e)}")
+            # If an error occurs, just return what we have so far
+        
+        # Final verification of all states in the path
+        for i, state in enumerate(cleanup_path):
+            if len(state) != original_block_count:
+                print(f"ERROR: State {i} has incorrect block count: {len(state)} != {original_block_count}")
+                # Fix the state to have the correct block count
+                if i > 0:  # If not the first state
+                    prev_state = set(cleanup_path[i-1])
+                    if len(state) < original_block_count:
+                        # Add blocks from previous state
+                        missing = original_block_count - len(state)
+                        extra_blocks = list(prev_state - set(state))[:missing]
+                        state = list(set(state).union(extra_blocks))
+                    else:
+                        # Remove excess blocks
+                        excess = len(state) - original_block_count
+                        state = list(set(state))[:original_block_count]
+                    
+                    cleanup_path[i] = state
+        
+        print(f"Cleanup complete with {len(cleanup_path)} states")
+        return cleanup_path
+    
+    def find_clean_path(self, start_pos, end_pos, obstacles):
+        """
+        Find a clean path between two positions, avoiding all obstacles.
+        
+        Args:
+            start_pos: Starting position
+            end_pos: Target position
+            obstacles: Set of positions to avoid
+            
+        Returns:
+            List of positions forming a path, or None if no path found
+        """
+        # Use A* to find a path
+        open_set = []
+        heapq.heappush(open_set, (0, start_pos))
+        closed_set = set()
+        came_from = {start_pos: None}
+        g_score = {start_pos: 0}
+        
+        while open_set:
+            _, current = heapq.heappop(open_set)
+            
+            if current == end_pos:
+                # Reconstruct path
+                path = []
+                while current:
+                    path.append(current)
+                    current = came_from.get(current)
+                path.reverse()
+                return path
+            
+            closed_set.add(current)
+            
+            for dx, dy in self.directions:
+                neighbor = (current[0] + dx, current[1] + dy)
+                
+                if neighbor in closed_set:
+                    continue
+                
+                # Skip if out of bounds
+                if not (0 <= neighbor[0] < self.grid_size[0] and 
+                        0 <= neighbor[1] < self.grid_size[1]):
+                    continue
+                
+                # Skip if obstacle (unless it's the target)
+                if neighbor in obstacles and neighbor != end_pos:
+                    continue
+                
+                tentative_g = g_score[current] + 1
+                
+                if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + abs(neighbor[0] - end_pos[0]) + abs(neighbor[1] - end_pos[1])
+                    heapq.heappush(open_set, (f_score, neighbor))
+        
+        # No path found
+        return None
+    
+    def standard_reconnection(self, clusters, cluster_distances, current_state_set, blocks_at_goal, cleanup_path):
+        """
+        Standard approach to reconnect clusters based on distance to goal.
+        
+        Args:
+            clusters: List of clusters to reconnect
+            cluster_distances: List of (cluster_idx, distance) tuples
+            current_state_set: Current state as a set
+            blocks_at_goal: Set of blocks already at goal positions
+            cleanup_path: Path being built
+            
+        Returns:
+            Set of connected non-goal blocks
+        """
+        # The closest cluster is our anchor
+        anchor_idx = cluster_distances[0][0]
+        
+        print(f"Cluster {anchor_idx} is closest to unfilled goals (distance: {cluster_distances[0][1]})")
+        
+        # Keep track of our current state
+        current_blocks = current_state_set.copy()
+        
+        # Start with the anchor cluster as our connected component
+        connected_blocks = set(clusters[anchor_idx])
+        
+        # Process clusters from closest to furthest (excluding the anchor)
+        other_clusters_indices = [i for i, _ in cluster_distances if i != anchor_idx]
+        
+        for idx in other_clusters_indices:
+            self.reconnect_clusters_strict(clusters[idx], connected_blocks, current_blocks, blocks_at_goal, cleanup_path)
+        
+        # Return the connected non-goal blocks
+        return connected_blocks
+    
+    def reconnect_clusters_strict(self, clusters, cluster_distances, current_state, blocks_at_goal, cleanup_path, original_block_count):
+        """
+        Improved cluster reconnection with better traversal.
+        
+        Args:
+            clusters: List of clusters to reconnect
+            cluster_distances: List of (cluster_idx, distance) tuples
+            current_state: Current state as a list
+            blocks_at_goal: Set of blocks already at goal positions
+            cleanup_path: Path being built
+            original_block_count: Original number of blocks to maintain
+            
+        Returns:
+            Set of connected non-goal blocks
+        """
+        # The closest cluster is our anchor
+        anchor_idx = cluster_distances[0][0]
+        
+        # Keep track of our current state
+        current_blocks = set(current_state)
+        
+        # Start with the anchor cluster as our connected component
+        connected_blocks = set(clusters[anchor_idx])
+        
+        # Process clusters from closest to furthest (excluding the anchor)
+        other_clusters_indices = [i for i, _ in cluster_distances if i != anchor_idx]
+        
+        for idx in other_clusters_indices:
+            cluster_to_connect = set(clusters[idx])
+            if not cluster_to_connect:
+                continue
+                
+            print(f"Connecting cluster {idx} with {len(cluster_to_connect)} blocks")
+            
+            # Calculate centroids
+            source_centroid = self.calculate_centroid(cluster_to_connect)
+            target_centroid = self.calculate_centroid(connected_blocks)
+            
+            # For very close clusters, just combine them directly
+            distance = abs(source_centroid[0] - target_centroid[0]) + abs(source_centroid[1] - target_centroid[1])
+            if distance <= 3:
+                connected_blocks.update(cluster_to_connect)
+                print(f"Clusters are very close, direct connection made")
+                continue
+            
+            # For more distant clusters, move the entire cluster step by step
+            print(f"Moving cluster at distance {distance}")
+            
+            # Calculate direction vector from source to target
+            dx = target_centroid[0] - source_centroid[0]
+            dy = target_centroid[1] - source_centroid[1]
+            
+            # Normalize direction
+            total_steps = max(1, abs(dx) + abs(dy))
+            step_x = dx / total_steps if total_steps > 0 else 0
+            step_y = dy / total_steps if total_steps > 0 else 0
+            
+            # We'll move in small increments to maintain connectivity
+            max_steps = min(int(total_steps), 15)  # Limit to avoid too many steps
+            
+            # Track the moving cluster's positions
+            moving_cluster = cluster_to_connect.copy()
+            
+            # For each step...
+            for step in range(1, max_steps + 1):
+                # Calculate how much to move in this step
+                move_x = int(round(step_x * step))
+                move_y = int(round(step_y * step))
+                
+                # Calculate tentative new positions for all blocks in cluster
+                new_positions = {}
+                for block in moving_cluster:
+                    new_pos = (block[0] + move_x, block[1] + move_y)
+                    
+                    # Check if position is valid
+                    if (0 <= new_pos[0] < self.grid_size[0] and 
+                        0 <= new_pos[1] < self.grid_size[1] and
+                        new_pos not in self.obstacles and
+                        new_pos not in blocks_at_goal and
+                        (new_pos not in current_blocks or new_pos in moving_cluster)):
+                        new_positions[block] = new_pos
+                
+                # If no valid moves, try to navigate around obstacles
+                if not new_positions and step > 1:
+                    # Try alternative directions
+                    alt_directions = [
+                        (move_x, 0),      # Try moving just horizontally
+                        (0, move_y),      # Try moving just vertically
+                        (move_x, move_y + 1),  # Try with slight vertical offset
+                        (move_x + 1, move_y),  # Try with slight horizontal offset
+                    ]
+                    
+                    for alt_x, alt_y in alt_directions:
+                        alt_new_positions = {}
+                        for block in moving_cluster:
+                            alt_pos = (block[0] + alt_x, block[1] + alt_y)
+                            
+                            if (0 <= alt_pos[0] < self.grid_size[0] and 
+                                0 <= alt_pos[1] < self.grid_size[1] and
+                                alt_pos not in self.obstacles and
+                                alt_pos not in blocks_at_goal and
+                                (alt_pos not in current_blocks or alt_pos in moving_cluster)):
+                                alt_new_positions[block] = alt_pos
+                        
+                        if len(alt_new_positions) > len(new_positions):
+                            new_positions = alt_new_positions
+                
+                # If we still can't move any blocks, stop this cluster's movement
+                if not new_positions:
+                    print(f"Cannot move cluster further, stopping at step {step}")
+                    break
+                
+                # Now move the blocks we can move
+                moved_blocks = set()
+                
+                # First remove blocks from their old positions
+                for block in new_positions:
+                    current_blocks.remove(block)
+                    moved_blocks.add(block)
+                
+                # Update path to show removal
+                if moved_blocks:
+                    cleanup_path.append(list(current_blocks))
+                
+                # Add blocks at their new positions
+                for block, new_pos in new_positions.items():
+                    current_blocks.add(new_pos)
+                
+                # Update path to show addition
+                if moved_blocks:
+                    cleanup_path.append(list(current_blocks))
+                
+                # Verify block count
+                assert len(current_blocks) == original_block_count, f"Block count mismatch: {len(current_blocks)}"
+                
+                # Update moving cluster with new positions
+                moving_cluster = set()
+                for block, new_pos in new_positions.items():
+                    moving_cluster.add(new_pos)
+                
+                # Check if we've reached the target cluster
+                for pos in moving_cluster:
+                    for target_pos in connected_blocks:
+                        if abs(pos[0] - target_pos[0]) + abs(pos[1] - target_pos[1]) == 1:
+                            # We've reached the target cluster, stop moving
+                            print(f"Cluster connected at step {step}")
+                            break
+                    else:
+                        continue
+                    break
+                else:
+                    # If we didn't break out of the loop, continue moving
+                    continue
+                
+                # If we got here, it means we broke out of both loops - we're connected
+                break
+            
+            # Update connected blocks with the moved cluster
+            connected_blocks.update(moving_cluster)
+            
+            print(f"Successfully connected cluster {idx}")
+        
+        # Return non-goal blocks
+        return current_blocks - blocks_at_goal
+    
+    def detect_and_fix_connection(self, cluster1, cluster2):
+        """
+        Detects if two clusters are adjacent and fixes the connection if needed.
+        
+        Args:
+            cluster1: First cluster as a set of positions
+            cluster2: Second cluster as a set of positions
+            
+        Returns:
+            (bool, list): Tuple with connection status and bridge positions if needed
+        """
+        # Check if any block in cluster1 is adjacent to any block in cluster2
+        for pos1 in cluster1:
+            for pos2 in cluster2:
+                if abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1]) == 1:
+                    # Clusters are already adjacent
+                    return True, []
+        
+        # Find the closest pair of blocks
+        min_distance = float('inf')
+        closest_pair = None
+        
+        for pos1 in cluster1:
+            for pos2 in cluster2:
+                dist = abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+                if dist < min_distance:
+                    min_distance = dist
+                    closest_pair = (pos1, pos2)
+        
+        if not closest_pair:
+            return False, []
+        
+        # Calculate direct path between the closest blocks
+        pos1, pos2 = closest_pair
+        dx = pos2[0] - pos1[0]
+        dy = pos2[1] - pos1[1]
+        
+        # Create bridge positions
+        bridge = []
+        
+        # Priority: move in the dimension with larger distance first
+        if abs(dx) > abs(dy):
+            # Move in x direction first
+            x_dir = 1 if dx > 0 else -1
+            for i in range(1, abs(dx)):
+                bridge.append((pos1[0] + i * x_dir, pos1[1]))
+            
+            # Then move in y direction
+            y_dir = 1 if dy > 0 else -1
+            for i in range(1, abs(dy) + 1):
+                bridge.append((pos2[0], pos1[1] + i * y_dir))
+        else:
+            # Move in y direction first
+            y_dir = 1 if dy > 0 else -1
+            for i in range(1, abs(dy)):
+                bridge.append((pos1[0], pos1[1] + i * y_dir))
+            
+            # Then move in x direction
+            x_dir = 1 if dx > 0 else -1
+            for i in range(1, abs(dx) + 1):
+                bridge.append((pos1[0] + i * x_dir, pos2[1]))
+        
+        return False, bridge
