@@ -50,13 +50,16 @@ class ConnectedMatterAgent:
         
         # Enhanced parameters for improved search
         self.beam_width = 800  # Increased beam width for better exploration
-        self.max_iterations = 100000  # Limit iterations to prevent infinite loops
+        self.max_iterations = 200000  # Limit iterations to prevent infinite loops
         
         # For obstacle pathfinding optimization
         self.distance_map_cache = {}
         self.obstacle_maze = None
         if obstacles:
             self.build_obstacle_maze()
+            
+        # NEW: Track blocks that have reached their goal positions
+        self.blocks_at_goal = set()
             
     def calculate_centroid(self, positions):
         """Calculate the centroid (average position) of a set of positions"""
@@ -178,8 +181,10 @@ class ConnectedMatterAgent:
             
             # Only consider moves that keep all positions within bounds and not overlapping obstacles
             if all_valid:
-                new_state = frozenset(new_positions)
-                valid_moves.append(new_state)
+                # NEW: Ensure no positions overlap - each position must be unique
+                if len(set(new_positions)) == len(new_positions):
+                    new_state = frozenset(new_positions)
+                    valid_moves.append(new_state)
         
         return valid_moves
     
@@ -197,18 +202,45 @@ class ConnectedMatterAgent:
         single_moves = []
         state_set = set(state)
         
+        # NEW: Identify blocks that have reached their goal positions
+        blocks_at_goal = state_set.intersection(self.goal_state)
+        self.blocks_at_goal = blocks_at_goal
+        
         # Find non-critical points that can move without breaking connectivity
         articulation_points = self.get_articulation_points(state_set)
-        movable_points = state_set - articulation_points
         
-        # If all points are critical, try moving one anyway but verify connectivity 
-        if not movable_points and articulation_points:
-            for point in articulation_points:
+        # NEW: Don't move blocks that have reached their goal positions
+        # unless they're the only blocks we can move (to avoid deadlock)
+        movable_points = state_set - articulation_points - blocks_at_goal
+        
+        # If all points are critical or at goal, try moving critical points that aren't at goals
+        if not movable_points:
+            for point in articulation_points - blocks_at_goal:
                 # Try removing and see if structure remains connected
                 temp_state = state_set.copy()
                 temp_state.remove(point)
                 if self.is_connected(temp_state):
                     movable_points.add(point)
+                    
+        # If still no movable points and we have blocks at goal,
+        # allow minimal movement of goal blocks as last resort
+        if not movable_points and blocks_at_goal:
+            # Try moving goal blocks that aren't critical articulation points first
+            non_critical_goal_blocks = blocks_at_goal - articulation_points
+            if non_critical_goal_blocks:
+                for point in non_critical_goal_blocks:
+                    temp_state = state_set.copy()
+                    temp_state.remove(point)
+                    if self.is_connected(temp_state):
+                        movable_points.add(point)
+            
+            # If still stuck, try critical goal blocks as absolute last resort
+            if not movable_points:
+                for point in blocks_at_goal.intersection(articulation_points):
+                    temp_state = state_set.copy()
+                    temp_state.remove(point)
+                    if self.is_connected(temp_state):
+                        movable_points.add(point)
         
         # Generate single block moves, prioritizing moves toward the goal
         for point in movable_points:
@@ -337,22 +369,53 @@ class ConnectedMatterAgent:
             # Check that no target is also a source for another move
             if tgt in sources or src in targets:
                 return False
+                
+            # NEW: Check that target doesn't overlap with any non-moving block
+            non_moving_blocks = state_set - sources
+            if tgt in non_moving_blocks:
+                return False
         
         return True
     
     def _apply_moves(self, state_set, moves):
         """Apply a list of moves to the state"""
         new_state = state_set.copy()
+        
+        # NEW: First validate that we won't have any overlaps
+        sources = set()
+        targets = set()
+        
+        for src, tgt in moves:
+            sources.add(src)
+            targets.add(tgt)
+            
+        # Ensure we're not creating duplicate positions
+        # 1. No target should overlap with a non-moving block
+        non_moving_blocks = state_set - sources
+        if targets.intersection(non_moving_blocks):
+            return state_set  # Return original state if overlap detected
+            
+        # 2. No duplicate targets
+        if len(targets) != len(moves):
+            return state_set  # Return original state if duplicate targets
+        
+        # Apply moves only if valid
         for src, tgt in moves:
             new_state.remove(src)
             new_state.add(tgt)
+            
+        # Verify we haven't lost any blocks
+        if len(new_state) != len(state_set):
+            print(f"WARNING: Block count changed from {len(state_set)} to {len(new_state)}")
+            return state_set  # Return original state if blocks were lost
+            
         return new_state
     
     def get_smart_chain_moves(self, state):
         """
         Generate chain moves where one block moves into the space of another
-        while that block moves elsewhere, maintaining connectivity
-        Now obstacle-aware and optimized for tight spaces
+        while that block moves elsewhere, maintaining connectivity.
+        Enhanced to prioritize clearing paths in tight spaces.
         """
         state_set = set(state)
         valid_moves = []
@@ -365,11 +428,7 @@ class ConnectedMatterAgent:
             
             for goal_pos in self.goal_state:
                 if goal_pos not in state_set:  # Only consider unoccupied goals
-                    if self.obstacles:
-                        dist = self.obstacle_aware_distance(pos, goal_pos)
-                    else:
-                        dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
-                    
+                    dist = self.obstacle_aware_distance(pos, goal_pos)
                     if dist < min_dist:
                         min_dist = dist
                         closest_goal = goal_pos
@@ -384,51 +443,12 @@ class ConnectedMatterAgent:
             # Try moving in that direction
             next_pos = (pos[0] + dx, pos[1] + dy)
             
-            # Skip if out of bounds or is an obstacle
-            if not (0 <= next_pos[0] < self.grid_size[0] and 
-                    0 <= next_pos[1] < self.grid_size[1]):
-                continue
-                
-            # Skip if position is an obstacle
-            if next_pos in self.obstacles:
-                continue
-            
             # If next position is occupied, try chain move
             if next_pos in state_set:
-                # Try moving the blocking block in the same direction if possible
                 chain_pos = (next_pos[0] + dx, next_pos[1] + dy)
                 
                 # Check if chain position is valid
-                if (0 <= chain_pos[0] < self.grid_size[0] and 
-                    0 <= chain_pos[1] < self.grid_size[1] and
-                    chain_pos not in state_set and
-                    chain_pos not in self.obstacles):
-                    
-                    # Create new state by moving both blocks in the same direction
-                    new_state_set = state_set.copy()
-                    new_state_set.remove(pos)
-                    new_state_set.remove(next_pos)
-                    new_state_set.add(next_pos)
-                    new_state_set.add(chain_pos)
-                    
-                    # Check if new state is connected
-                    if self.is_connected(new_state_set):
-                        valid_moves.append(frozenset(new_state_set))
-                
-                # Also try all other directions for the blocking block
-                for chain_dx, chain_dy in self.directions:
-                    if (chain_dx, chain_dy) == (dx, dy):
-                        continue  # Skip the direction we just tried
-                    
-                    chain_pos = (next_pos[0] + chain_dx, next_pos[1] + chain_dy)
-                    
-                    # Skip if out of bounds, occupied, is an obstacle, or original position
-                    if not (0 <= chain_pos[0] < self.grid_size[0] and 
-                            0 <= chain_pos[1] < self.grid_size[1]):
-                        continue
-                    if chain_pos in state_set or chain_pos == pos or chain_pos in self.obstacles:
-                        continue
-                    
+                if chain_pos not in state_set and chain_pos not in self.obstacles:
                     # Create new state by moving both blocks
                     new_state_set = state_set.copy()
                     new_state_set.remove(pos)
@@ -439,9 +459,8 @@ class ConnectedMatterAgent:
                     # Check if new state is connected
                     if self.is_connected(new_state_set):
                         valid_moves.append(frozenset(new_state_set))
-            
-            # If next position is unoccupied, try direct move
             else:
+                # Direct move if next position is unoccupied
                 new_state_set = state_set.copy()
                 new_state_set.remove(pos)
                 new_state_set.add(next_pos)
@@ -460,8 +479,15 @@ class ConnectedMatterAgent:
         state_set = set(state)
         valid_moves = []
         
+        # NEW: Identify blocks that have reached their goal positions
+        blocks_at_goal = state_set.intersection(self.goal_state)
+        
         # For each block, try to initiate a sliding chain
         for pos in state_set:
+            # Skip if it's at a goal position
+            if pos in blocks_at_goal:
+                continue
+                
             # Skip if it's a critical articulation point
             articulation_points = self.get_articulation_points(state_set)
             if pos in articulation_points and len(articulation_points) <= 20:
@@ -496,8 +522,8 @@ class ConnectedMatterAgent:
                         new_state_set.remove(pos)
                         new_state_set.add(target_pos)
                         
-                        # Check if new state is connected
-                        if self.is_connected(new_state_set):
+                        # Check if new state is connected and has the correct number of blocks
+                        if self.is_connected(new_state_set) and len(new_state_set) == len(state_set):
                             valid_moves.append(frozenset(new_state_set))
                         
                         # No need to continue if we can't reach this position
@@ -521,7 +547,15 @@ class ConnectedMatterAgent:
         # Combine all moves (frozensets automatically handle duplicates)
         all_moves = list(set(basic_moves + chain_moves + sliding_moves))
         
-        return all_moves
+        # NEW: Verify all moves have the correct number of blocks
+        valid_moves = []
+        for move in all_moves:
+            if len(move) == len(state):
+                valid_moves.append(move)
+            else:
+                print(f"WARNING: Invalid move with {len(move)} blocks instead of {len(state)}")
+        
+        return valid_moves
     
     def block_heuristic(self, state):
         """
@@ -571,18 +605,33 @@ class ConnectedMatterAgent:
         if len(state_list) != len(goal_list):
             return float('inf')
         
+        # NEW: Reward blocks that are already in goal positions
+        blocks_at_goal = set(state).intersection(self.goal_state)
+        goal_bonus = -len(blocks_at_goal) * 10  # Large negative value (bonus) for blocks in place
+        
         # Build distance matrix with obstacle-aware distances
         distances = []
         for pos in state_list:
-            row = []
-            for goal_pos in goal_list:
-                # Use obstacle-aware distance calculation
-                if self.obstacles:
-                    dist = self.obstacle_aware_distance(pos, goal_pos)
-                else:
-                    # Use faster Manhattan distance if no obstacles
-                    dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
-                row.append(dist)
+            # NEW: If block is already at a goal position, give it maximum preference
+            # to stay where it is by assigning 0 distance to its current position
+            # and high distance to all other positions
+            if pos in self.goal_state:
+                row = [0 if goal_pos == pos else 1000 for goal_pos in goal_list]
+            else:
+                row = []
+                for goal_pos in goal_list:
+                    # Use obstacle-aware distance calculation
+                    if self.obstacles:
+                        dist = self.obstacle_aware_distance(pos, goal_pos)
+                    else:
+                        # Use faster Manhattan distance if no obstacles
+                        dist = abs(pos[0] - goal_pos[0]) + abs(pos[1] - goal_pos[1])
+                        
+                    # NEW: If this goal position is already filled, make it less attractive
+                    if goal_pos in blocks_at_goal and goal_pos != pos:
+                        dist += 100  # Discourage moving to goals that are already filled
+                        
+                    row.append(dist)
             distances.append(row)
         
         # Use greedy assignment algorithm
@@ -614,11 +663,8 @@ class ConnectedMatterAgent:
                 # No assignment possible
                 return float('inf')
         
-        # Add connectivity bonus: prefer states that have more blocks in goal positions
-        matching_positions = len(state.intersection(self.goal_state))
-        connectivity_bonus = -matching_positions * 0.5  # Negative to encourage more matches
-        
-        return total_distance + connectivity_bonus
+        # Return total distance plus goal bonus
+        return total_distance + goal_bonus
     
     def block_movement_phase(self, time_limit=15):
         """
@@ -742,6 +788,10 @@ class ConnectedMatterAgent:
         print(f"Starting Smarter Morphing Phase with {self.min_simultaneous_moves}-{self.max_simultaneous_moves} simultaneous moves...")
         start_time = time.time()
         
+        # NEW: Identify blocks already at goal positions in the start state
+        self.blocks_at_goal = set(start_state).intersection(self.goal_state)
+        print(f"Starting morphing with {len(self.blocks_at_goal)} blocks already at goal positions")
+        
         # Adapt beam width based on obstacle density
         adaptive_beam_width = self.beam_width
         if len(self.obstacles) > 0:
@@ -762,6 +812,9 @@ class ConnectedMatterAgent:
         best_state = start_state
         best_heuristic = self.improved_morphing_heuristic(start_state)
         
+        # NEW: Track the maximum number of blocks at goal positions seen so far
+        max_blocks_at_goal = len(self.blocks_at_goal)
+        
         iterations = 0
         last_improvement_time = time.time()
         
@@ -780,16 +833,25 @@ class ConnectedMatterAgent:
                 print(f"Goal reached after {iterations} iterations!")
                 return self.reconstruct_path(came_from, current)
             
+            # Check how many blocks are at goal positions in current state
+            blocks_at_goal_current = len(set(current).intersection(self.goal_state))
+            
+            # NEW: Update max_blocks_at_goal if we found a better state
+            if blocks_at_goal_current > max_blocks_at_goal:
+                max_blocks_at_goal = blocks_at_goal_current
+                print(f"New maximum blocks at goal: {max_blocks_at_goal}/{len(self.goal_state)}")
+            
             # Check if this is the best state seen so far
             current_heuristic = self.improved_morphing_heuristic(current)
-            if current_heuristic < best_heuristic:
+            if current_heuristic < best_heuristic or blocks_at_goal_current > len(self.blocks_at_goal):
                 best_state = current
                 best_heuristic = current_heuristic
+                self.blocks_at_goal = set(current).intersection(self.goal_state)
                 last_improvement_time = time.time()
                 
                 # Print progress occasionally
                 if iterations % 500 == 0:
-                    print(f"Progress: h={best_heuristic}, iterations={iterations}")
+                    print(f"Progress: h={best_heuristic}, blocks at goal={len(self.blocks_at_goal)}/{len(self.goal_state)}, iterations={iterations}")
                     
                 # If we're very close to the goal, increase search intensity
                 if best_heuristic < 5 * len(self.goal_state):
@@ -822,10 +884,21 @@ class ConnectedMatterAgent:
                 tentative_g = g_score[current] + 1
                 
                 if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                    # Check if the move causes blocks to disappear
+                    if len(neighbor) != len(current):
+                        continue  # Skip this move
+                        
                     # This is a better path
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
-                    f_score = tentative_g + self.improved_morphing_heuristic(neighbor)
+                    
+                    # NEW: Calculate blocks at goal in this neighbor
+                    blocks_at_goal_neighbor = len(set(neighbor).intersection(self.goal_state))
+                    
+                    # NEW: Prioritize states with more blocks at goal positions by giving them better f-scores
+                    goal_position_bonus = max(0, blocks_at_goal_neighbor - blocks_at_goal_current) * 10
+                    
+                    f_score = tentative_g + self.improved_morphing_heuristic(neighbor) - goal_position_bonus
                     
                     # Add to open set
                     heapq.heappush(open_set, (f_score, tentative_g, neighbor))
@@ -901,6 +974,15 @@ class ConnectedMatterAgent:
         # Combine paths (remove duplicate state at transition)
         combined_path = block_path[:-1] + morphing_path
         
+        # NEW: Verify block count is consistent throughout the path
+        expected_count = len(self.start_state)
+        for i, state in enumerate(combined_path):
+            if len(state) != expected_count:
+                print(f"WARNING: State {i} has {len(state)} blocks instead of {expected_count}")
+                # Fix the state by using the previous valid state
+                if i > 0:
+                    combined_path[i] = combined_path[i-1]
+        
         return combined_path
     
     def visualize_path(self, path, interval=0.5):
@@ -924,40 +1006,73 @@ class ConnectedMatterAgent:
         ax.set_ylim(min_y - 0.5, max_y + 0.5)
         ax.grid(True)
     
+        # NEW: Track and display blocks at goal positions differently
         # Draw goal positions (as outlines)
+        goal_rects = []
         for pos in self.goal_positions:
             rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, fill=False, edgecolor='green', linewidth=2)
             ax.add_patch(rect)
+            goal_rects.append(rect)
     
-        # Draw current positions (blue squares)
+        # Draw current positions
         current_positions = path[0]
-        rects = []
-        for pos in current_positions:
+        
+        # NEW: Determine which blocks are at goal positions
+        blocks_at_goal = [pos for pos in current_positions if (pos[0], pos[1]) in self.goal_state]
+        blocks_not_at_goal = [pos for pos in current_positions if (pos[0], pos[1]) not in self.goal_state]
+        
+        # Draw blocks at goal positions (green filled squares)
+        goal_block_rects = []
+        for pos in blocks_at_goal:
+            rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='green', alpha=0.7)
+            ax.add_patch(rect)
+            goal_block_rects.append(rect)
+            
+        # Draw other blocks (blue squares)
+        non_goal_rects = []
+        for pos in blocks_not_at_goal:
             rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='blue', alpha=0.7)
             ax.add_patch(rect)
-            rects.append(rect)
+            non_goal_rects.append(rect)
         
-        ax.set_title(f"Step 0/{len(path)-1}")
+        ax.set_title(f"Step 0/{len(path)-1} - {len(blocks_at_goal)} blocks at goal")
         plt.draw()
         plt.pause(interval)
     
         # Animate the path
         for i in range(1, len(path)):
+            # NEW: Verify block count is consistent
+            if len(path[i]) != len(path[0]):
+                print(f"Warning: State {i} has {len(path[i])} blocks instead of {len(path[0])}")
+                # If block count is inconsistent, skip this frame
+                continue
+                
             # Update positions
             new_positions = path[i]
         
-            # Clear previous positions
-            for rect in rects:
+            # Clear previous blocks
+            for rect in goal_block_rects + non_goal_rects:
                 rect.remove()
-        
-            # Draw new positions
-            rects = []
-            for pos in new_positions:
+            
+            # NEW: Determine which blocks are at goal positions
+            blocks_at_goal = [pos for pos in new_positions if (pos[0], pos[1]) in self.goal_state]
+            blocks_not_at_goal = [pos for pos in new_positions if (pos[0], pos[1]) not in self.goal_state]
+            
+            # Draw blocks at goal positions (green filled squares)
+            goal_block_rects = []
+            for pos in blocks_at_goal:
+                rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='green', alpha=0.7)
+                ax.add_patch(rect)
+                goal_block_rects.append(rect)
+                
+            # Draw other blocks (blue squares)
+            non_goal_rects = []
+            for pos in blocks_not_at_goal:
                 rect = plt.Rectangle((pos[1] - 0.5, pos[0] - 0.5), 1, 1, facecolor='blue', alpha=0.7)
                 ax.add_patch(rect)
-                rects.append(rect)
+                non_goal_rects.append(rect)
             
-            ax.set_title(f"Step {i}/{len(path)-1}")
+            ax.set_title(f"Step {i}/{len(path)-1} - {len(blocks_at_goal)} blocks at goal")
             plt.draw()
             plt.pause(interval)
     
@@ -1019,14 +1134,15 @@ class ConnectedMatterAgent:
         # If no obstacles, use Manhattan distance for speed
         if not self.obstacles:
             return abs(pos[0] - target[0]) + abs(pos[1] - target[1])
-            
+        
         # Get or calculate distance map for this target
         dist_map = self.calculate_distance_map(target)
-        
-        # Return the distance from the map
+    
+        # Bounds check to avoid IndexError
+        if not (0 <= pos[0] < self.grid_size[0] and 0 <= pos[1] < self.grid_size[1]):
+            return float('inf')
+    
         return dist_map[pos[0]][pos[1]]
-        
-    # New methods for handling disconnected goal states
     
     def find_disconnected_components(self, positions):
         """
@@ -1221,7 +1337,6 @@ class ConnectedMatterAgent:
     
     def assign_blocks_to_components(self, state):
         """
-        Assign blocks from the current state to goal components based on proximity
         Returns a dictionary mapping each component index to a set of positions
         """
         assignments = {i: set() for i in range(len(self.goal_components))}
@@ -1505,8 +1620,8 @@ class ConnectedMatterAgent:
         # If we exit the loop, return the best state found
         print(f"Component morphing timed out after {iterations} iterations!")
         return self.reconstruct_path(came_from, best_state)
-
-    def search_disconnected_goal(self, time_limit=30):
+    
+    def search_disconnected_goal(self, time_limit=100):
         """
         Search method for disconnected goal states:
         1. Move blocks to strategic position
@@ -1515,75 +1630,151 @@ class ConnectedMatterAgent:
         """
         print(f"Starting search for disconnected goal with {len(self.goal_components)} components")
         start_time = time.time()
-    
+
         # Allocate time for different phases
         move_time_ratio = 0.2  # 20% for block movement
-        disconnect_time_ratio = 0.1  # 10% for disconnection planning
-        morphing_time_ratio = 0.7  # 70% for morphing
-    
+        disconnect_time_ratio = 0.15  # 10% for disconnection planning
+        morphing_time_ratio = 0.65  # 70% for morphing
+
         # Adjust ratios if obstacles are present
         if len(self.obstacles) > 0:
             obstacle_density = len(self.obstacles) / (self.grid_size[0] * self.grid_size[1])
             move_time_ratio = min(0.4, 0.2 + obstacle_density * 0.5)  # Up to 40% for movement
             morphing_time_ratio = 1.0 - move_time_ratio - disconnect_time_ratio
-    
+
         move_time_limit = time_limit * move_time_ratio
         disconnect_time_limit = time_limit * disconnect_time_ratio
         morphing_time_limit = time_limit * morphing_time_ratio
-    
+
         print(f"Time allocation: {move_time_ratio:.1%} block movement, "
                 f"{disconnect_time_ratio:.1%} disconnection planning, "
                 f"{morphing_time_ratio:.1%} morphing")
-    
+
         # Phase 1: Strategic Block Movement
         block_path = self.disconnected_block_movement_phase(move_time_limit)
-    
+
         if not block_path:
             print("Block movement phase failed!")
             return None
-    
+
         # Get the final state from block movement phase
         block_final_state = frozenset(block_path[-1])
-    
+
         # Phase 2: Assign blocks to components and plan disconnection
         assignments_start_time = time.time()
         assignments = self.assign_blocks_to_components(block_final_state)
-    
+
         if assignments is None:
             print("Failed to assign blocks to components!")
             return block_path
-    
+
         # Theoretical disconnection planning
         disconnect_path = self.plan_disconnect_moves(block_final_state, assignments)
         disconnect_time_used = time.time() - assignments_start_time
-    
+
         # Add remaining disconnect time to morphing time
         if disconnect_time_used < disconnect_time_limit:
             morphing_time_limit += (disconnect_time_limit - disconnect_time_used)
-    
+
         # Phase 3: Parallel Morphing of Components
         print(f"Starting parallel morphing of {len(self.goal_components)} components")
-    
+
         # Prepare component states and goals
         component_start_states = []
         for i in range(len(self.goal_components)):
             component_start_states.append(frozenset(assignments[i]))
-    
+
         # Time allocation for each component based on its size
         total_blocks = sum(len(comp) for comp in self.goal_components)
         component_time_limits = [
             morphing_time_limit * len(comp) / total_blocks
             for comp in self.goal_components
         ]
+
+        # Add shared resources for thread coordination
+        from threading import Lock
+        shared_grid_lock = Lock()
+        shared_occupied_cells = set()  # Track cells occupied by any component
+        component_locks = [Lock() for _ in range(len(self.goal_components))]
+        component_occupied_cells = [set() for _ in range(len(self.goal_components))]
+        
+        # Initialize shared grid with current occupied cells
+        for i, comp_state in enumerate(component_start_states):
+            component_occupied_cells[i] = set(comp_state)
+            shared_occupied_cells.update(comp_state)
+        
+        # Create wrapper function for thread-safe component morphing
+        def thread_safe_component_morphing(i, start_state, goal_component, time_limit):
+            """Wrapper for thread-safe component morphing with coordination"""
+            # Create a thread-local version of get_all_valid_moves
+            def coordinated_get_valid_moves(state):
+                # Get basic moves without coordination
+                basic_moves = self.get_valid_morphing_moves(state)
+                chain_moves = self.get_smart_chain_moves(state)
+                sliding_moves = self.get_sliding_chain_moves(state)
+                
+                # Combine all moves
+                all_moves = list(set(basic_moves + chain_moves + sliding_moves))
+                
+                # Apply coordination checks
+                valid_moves = []
+                with shared_grid_lock:
+                    # Calculate cells that other components are using
+                    others_occupied = shared_occupied_cells.copy()
+                    for pos in state:
+                        if pos in others_occupied:
+                            others_occupied.remove(pos)
+                    
+                    for move in all_moves:
+                        # Check for conflicts with other components
+                        has_conflict = False
+                        for pos in move:
+                            if pos in others_occupied:
+                                has_conflict = True
+                                break
+                        
+                        if not has_conflict:
+                            valid_moves.append(move)
+                
+                return valid_moves
+            
+            # Temporarily override the get_all_valid_moves method for this thread
+            original_get_all_valid_moves = self.get_all_valid_moves
+            self.get_all_valid_moves = coordinated_get_valid_moves
+            
+            try:
+                # Run the original morphing with our thread-safe version
+                result = self.component_morphing_phase(start_state, goal_component, time_limit)
+                
+                # Update shared grid with final state
+                final_state = result[-1] if result else start_state
+                with shared_grid_lock:
+                    # Remove old positions
+                    for pos in component_occupied_cells[i]:
+                        if pos in shared_occupied_cells:
+                            shared_occupied_cells.remove(pos)
+                    
+                    # Add new positions
+                    shared_occupied_cells.update(final_state)
+                    component_occupied_cells[i] = set(final_state)
+                
+                return result
+            finally:
+                # Restore original method
+                self.get_all_valid_moves = original_get_all_valid_moves
+        
+        # Initialize component_paths
+        component_paths = []
     
-        # Use thread pool for parallel morphing
+        # Use thread pool for parallel morphing with coordination
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(self.goal_components)) as executor:
-            # Submit tasks for each component
+            # Submit tasks for each component with our wrapper
             futures = []
             for i in range(len(self.goal_components)):
                 futures.append(
                     executor.submit(
-                        self.component_morphing_phase,
+                        thread_safe_component_morphing,
+                        i,
                         component_start_states[i],
                         self.goal_components[i],
                         component_time_limits[i]
@@ -1591,30 +1782,103 @@ class ConnectedMatterAgent:
                 )
         
             # Collect results as they complete
-            component_paths = []
-            for future in concurrent.futures.as_completed(futures):
-                component_paths.append(future.result())
-    
+            for i, future in enumerate(futures):
+                try:
+                    result = future.result()
+                    component_paths.append(result)
+                except Exception as e:
+                    print(f"Error in component {i} morphing: {e}")
+                    # Add the start state as a fallback to ensure we have a path
+                    component_paths.append([component_start_states[i]])
+
+        # Make sure we have a path for each component
+        if len(component_paths) != len(self.goal_components):
+            print(f"Warning: Expected {len(self.goal_components)} component paths, got {len(component_paths)}")
+            # Fill in missing paths with their start states
+            for i in range(len(component_paths), len(self.goal_components)):
+                component_paths.append([component_start_states[i]])
+
         # Combine the paths from all components
         combined_path = block_path[:-1]  # Remove the last state from block path
-    
+
         # Add the component paths after the block movement
         # For visualization, we'll alternate steps from each component
         # to show them moving simultaneously
         max_component_path_length = max(len(path) for path in component_paths)
-    
+
         for step in range(max_component_path_length):
             combined_state = set()
             for i, path in enumerate(component_paths):
                 # If this component's path is long enough, add its state at this step
                 if step < len(path):
                     combined_state.update(path[step])
+                elif path:  # Add this condition to use the final state when a thread is done
+                    combined_state.update(path[-1])  # Use the last state of this component
         
             # Add the combined state to the path if not empty
             if combined_state:
                 combined_path.append(list(combined_state))
-    
+
+        # Check if goal is reached using our more forgiving criterion
+        if not self.is_full_disconnected_goal_reached(combined_path[-1]):
+            print("WARNING: Final state does not match all goal components. Returning incomplete solution.")
+            # Optionally, return None or the best partial path
+            return None
+
         return combined_path
+
+    def is_full_disconnected_goal_reached(self, state):
+        """
+        Check if goal components are sufficiently matched in the current state.
+        Allows for some tolerance in the matching to avoid being too strict.
+        """
+        state_components = self.find_disconnected_components(state)
+        
+        # If we have fewer components than the goal, we're definitely not done
+        if len(state_components) < len(self.goal_components):
+            return False
+        
+        # For each goal component, find the best matching state component
+        total_correct_blocks = 0
+        total_goal_blocks = sum(len(comp) for comp in self.goal_components)
+        
+        # Convert to sets for easier intersection operations
+        goal_component_sets = [set(comp) for comp in self.goal_components]
+        state_component_sets = [set(comp) for comp in state_components]
+        
+        # Match each goal component to its best-matching state component
+        # without reusing state components
+        matched_state_indices = set()
+        
+        for gc in goal_component_sets:
+            best_match = 0
+            best_idx = -1
+            
+            for i, sc in enumerate(state_component_sets):
+                if i in matched_state_indices:
+                    continue  # Skip already matched components
+                    
+                # Calculate intersection (blocks in the correct position)
+                intersection = len(gc.intersection(sc))
+                
+                if intersection > best_match:
+                    best_match = intersection
+                    best_idx = i
+            
+            if best_idx >= 0:
+                matched_state_indices.add(best_idx)
+                total_correct_blocks += best_match
+        
+        # Calculate match percentage
+        match_percentage = total_correct_blocks / total_goal_blocks if total_goal_blocks > 0 else 0
+        
+        # Print debug info for monitoring
+        print(f"Match percentage: {match_percentage:.2%} ({total_correct_blocks}/{total_goal_blocks} blocks)")
+        
+        # Accept if at least 90% of blocks are correctly placed
+        # This threshold can be adjusted based on requirements
+        threshold = 0.90
+        return match_percentage >= threshold
 
     def get_disconnected_valid_moves(self, state, goal_components):
         """

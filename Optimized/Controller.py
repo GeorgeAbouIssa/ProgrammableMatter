@@ -11,8 +11,8 @@ class SearchController:
         self.grid_size = grid_size
         self.formations = formations  # Dictionary of shape names and their goal positions
         self.start_positions = formations["start"]
-        self.current_shape = "Ring"  # Default shape
-        self.goal_positions = formations["Ring"]
+        self.current_shape = "None"  # Default shape
+        self.goal_positions = formations["None"]
         self.topology = topology
         self.time_limit = time_limit
         self.max_simultaneous_moves = max_simultaneous_moves
@@ -26,6 +26,7 @@ class SearchController:
         # Create visualizer with default animation speed
         self.animation_speed = 0.05  # Default animation speed (seconds)
         self.vis = Visualizer(grid_size, [], self.start_positions, self.animation_speed)
+        self.vis.controller = self  # Add this line
         self.vis.draw_grid()
         plt.show(block=False)  # Show grid before printing anything
 
@@ -743,6 +744,8 @@ if __name__ == "__main__":
     formations = {
         "start": [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3), (0, 4), (1, 4),
                   (0, 5), (1, 5), (0, 6), (1, 6), (0, 7), (1, 7), (0, 8), (1, 8), (0, 9), (1, 9)],
+        
+        "None":[],
         
         "Ring": [(7, 4), (7, 5), (6, 3), (6, 4), (6, 5), (6, 6), (5, 2), (5, 3), (5, 6), (5, 7),
                  (4, 2), (4, 3), (4, 6), (4, 7), (3, 3), (3, 4), (3, 5), (3, 6), (2, 4), (2, 5)],
