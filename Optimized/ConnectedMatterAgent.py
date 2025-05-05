@@ -564,7 +564,13 @@ class ConnectedMatterAgent:
         """
         if not state:
             return float('inf')
-            
+        
+        # NEW: Check if we've lost any blocks and apply proportional penalty
+        if len(state) < len(self.start_state):
+            missing_blocks = len(self.start_state) - len(state)
+            missing_penalty = 10000 * missing_blocks  # Large penalty per missing block
+            return missing_penalty  # Return large penalty proportional to missing blocks
+                
         current_centroid = self.calculate_centroid(state)
         goal_centroid_int = (int(self.goal_centroid[0]), int(self.goal_centroid[1]))
         
@@ -597,7 +603,13 @@ class ConnectedMatterAgent:
         """
         if not state:
             return float('inf')
-            
+        
+        # NEW: Check if we've lost any blocks and apply proportional penalty
+        if len(state) < len(self.start_state):
+            missing_blocks = len(self.start_state) - len(state)
+            missing_penalty = 10000 * missing_blocks  # Large penalty per missing block
+            return missing_penalty  # Return large penalty proportional to missing blocks
+                
         state_list = list(state)
         goal_list = list(self.goal_state)
         
@@ -1457,7 +1469,13 @@ class ConnectedMatterAgent:
         """
         if not state:
             return float('inf')
-            
+        
+        # NEW: Check if we've lost any blocks compared to the component's required size
+        if len(state) < len(goal_component):
+            missing_blocks = len(goal_component) - len(state)
+            missing_penalty = 10000 * missing_blocks  # Large penalty per missing block
+            return missing_penalty  # Return large penalty proportional to missing blocks
+                
         state_list = list(state)
         goal_list = list(goal_component)
         
@@ -1501,7 +1519,7 @@ class ConnectedMatterAgent:
                 assigned_cols.add(best_j)
                 total_distance += min_dist
                 
-                # If a path is impossible, heavily penalize
+                # If a path is impossible (infinite distance), heavily penalize
                 if min_dist == float('inf'):
                     return float('inf')
             else:
