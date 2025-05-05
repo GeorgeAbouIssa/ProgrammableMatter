@@ -2,7 +2,7 @@ import heapq
 import time
 import matplotlib.pyplot as plt
 from collections import deque
-import threading
+import threading as Lock
 import concurrent.futures
 from functools import partial
 
@@ -1718,7 +1718,6 @@ class ConnectedMatterAgent:
         ]
 
         # Add shared resources for thread coordination
-        from threading import Lock
         shared_grid_lock = Lock()
         shared_occupied_cells = set()  # Track cells occupied by any component
         component_locks = [Lock() for _ in range(len(self.goal_components))]
