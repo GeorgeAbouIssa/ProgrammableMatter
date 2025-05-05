@@ -2,9 +2,9 @@ import heapq
 import time
 import matplotlib.pyplot as plt
 from collections import deque
+import threading
 import concurrent.futures
-import time
-from threading import Lock
+from functools import partial
 
 class ConnectedMatterAgent:
     def __init__(self, grid_size, start_positions, goal_positions, topology="moore", max_simultaneous_moves=1, min_simultaneous_moves=1, obstacles=None):
@@ -378,47 +378,35 @@ class ConnectedMatterAgent:
         return True
     
     def _apply_moves(self, state_set, moves):
-        """Apply a list of moves to the state with strict validation"""
+        """Apply a list of moves to the state"""
         new_state = state_set.copy()
         
-        # First validate that we won't have any overlaps
+        # NEW: First validate that we won't have any overlaps
         sources = set()
         targets = set()
         
         for src, tgt in moves:
-            # Verify source is in the state
-            if src not in state_set:
-                print(f"ERROR: Source {src} not in state")
-                return state_set
-                
             sources.add(src)
             targets.add(tgt)
             
         # Ensure we're not creating duplicate positions
         # 1. No target should overlap with a non-moving block
         non_moving_blocks = state_set - sources
-        overlaps = targets.intersection(non_moving_blocks)
-        if overlaps:
-            print(f"ERROR: Target positions {overlaps} overlap with non-moving blocks")
-            return state_set
+        if targets.intersection(non_moving_blocks):
+            return state_set  # Return original state if overlap detected
             
         # 2. No duplicate targets
         if len(targets) != len(moves):
-            print(f"ERROR: Duplicate targets in moves")
-            return state_set
+            return state_set  # Return original state if duplicate targets
         
         # Apply moves only if valid
         for src, tgt in moves:
-            if src in new_state:  # Double-check source exists
-                new_state.remove(src)
-                new_state.add(tgt)
-            else:
-                print(f"ERROR: Source {src} not in state during move application")
-                return state_set
+            new_state.remove(src)
+            new_state.add(tgt)
             
         # Verify we haven't lost any blocks
         if len(new_state) != len(state_set):
-            print(f"ERROR: Block count changed from {len(state_set)} to {len(new_state)}")
+            print(f"WARNING: Block count changed from {len(state_set)} to {len(new_state)}")
             return state_set  # Return original state if blocks were lost
             
         return new_state
@@ -1722,6 +1710,7 @@ class ConnectedMatterAgent:
         ]
 
         # Add shared resources for thread coordination
+        from threading import Lock
         shared_grid_lock = Lock()
         shared_occupied_cells = set()  # Track cells occupied by any component
         component_locks = [Lock() for _ in range(len(self.goal_components))]
@@ -1849,32 +1838,11 @@ class ConnectedMatterAgent:
                 combined_path.append(list(combined_state))
 
         # Check if goal is reached using our more forgiving criterion
-                # Check if goal is reached using our more forgiving criterion
         if not self.is_full_disconnected_goal_reached(combined_path[-1]):
-            print("WARNING: Final state does not match all goal components. Trying fixed-block approach...")
-            
-            # Get the current state
-            current_state = combined_path[-1]
-            
-            # Compute remaining time
-            remaining_time = time_limit - (time.time() - start_time)
-            if remaining_time <= 0:
-                print("Out of time to try fixed-block approach")
-                return combined_path
-                
-            # Try to find paths for remaining blocks with fixed-block approach
-            remaining_paths = self.compute_remaining_block_paths(current_state, remaining_time)
-            
-            if remaining_paths:
-                print("Successfully found paths for remaining blocks!")
-                # Combine the existing path with the new paths for remaining blocks
-                # Remove the last state from combined_path to avoid duplication
-                final_path = combined_path[:-1] + remaining_paths
-                return final_path
-            else:
-                print("Could not find paths for remaining blocks. Returning incomplete solution.")
-                return combined_path
-        
+            print("WARNING: Final state does not match all goal components. Returning incomplete solution.")
+            # Optionally, return None or the best partial path
+            return None
+
         return combined_path
 
     def is_full_disconnected_goal_reached(self, state):
@@ -1967,319 +1935,3 @@ class ConnectedMatterAgent:
                 all_moves.append(frozenset(new_state))
     
         return all_moves
-
-    def compute_remaining_block_paths(self, current_state, remaining_time=10):
-        """
-        For blocks that haven't reached goal positions, compute paths to available goals
-        treating blocks already in goal positions as obstacles.
-        """
-        print("Computing paths for remaining blocks...")
-        current_state_set = set(current_state)
-        
-        # Identify blocks already at goal positions
-        blocks_at_goal = current_state_set.intersection(self.goal_state)
-        print(f"{len(blocks_at_goal)}/{len(self.goal_state)} blocks already at goal positions")
-        
-        # Create temporary obstacles (blocks at goal are fixed)
-        temp_obstacles = self.obstacles.copy()
-        for pos in blocks_at_goal:
-            temp_obstacles.add(pos)
-            
-        # Identify remaining blocks and available goals
-        remaining_blocks = current_state_set - blocks_at_goal
-        available_goals = self.goal_state - blocks_at_goal
-        
-        print(f"Finding paths for {len(remaining_blocks)} blocks to {len(available_goals)} available goals")
-        
-        # Ensure we have enough goals for all blocks
-        if len(remaining_blocks) > len(available_goals):
-            print(f"Warning: More blocks ({len(remaining_blocks)}) than available goals ({len(available_goals)})")
-            return None
-            
-        # Create a copy of the agent with updated obstacles
-        original_obstacles = self.obstacles
-        self.obstacles = temp_obstacles
-        
-        # Rebuild obstacle maze with new obstacles
-        self.build_obstacle_maze()
-        
-        # Compute optimal assignment of blocks to goals
-        # First build distance matrix
-        remaining_blocks_list = list(remaining_blocks)
-        available_goals_list = list(available_goals)
-        distances = []
-        
-        for block in remaining_blocks_list:
-            distances_row = []
-            for goal in available_goals_list:
-                dist = self.obstacle_aware_distance(block, goal)
-                distances_row.append((goal, dist))
-            distances.append((block, distances_row))
-            
-        # Assign blocks to minimize total distance (greedy approach)
-        block_to_goal = {}
-        goal_to_block = {}
-        
-        # Sort blocks by minimum distance to any goal
-        distances.sort(key=lambda item: min(dist for _, dist in item[1]))
-        
-        for block, goals in distances:
-            # Sort goals by distance for this block
-            sorted_goals = sorted(goals, key=lambda item: item[1])
-            
-            # Find first unassigned goal
-            for goal, dist in sorted_goals:
-                if goal not in goal_to_block:
-                    block_to_goal[block] = goal
-                    goal_to_block[goal] = block
-                    break
-                    
-        # Check if all blocks were assigned
-        if len(block_to_goal) != len(remaining_blocks):
-            print(f"Warning: Could not assign all blocks to goals")
-            # Restore original obstacles
-            self.obstacles = original_obstacles
-            self.build_obstacle_maze()
-            return None
-            
-        # For each block, compute path to its assigned goal
-        # Use multithreading for parallel computation
-        def compute_path_for_block(block, goal):
-            path = self.find_path_for_block(block, goal, remaining_time / len(remaining_blocks))
-            return block, path
-            
-        block_paths = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(remaining_blocks))) as executor:
-            future_to_block = {
-                executor.submit(compute_path_for_block, block, goal): block
-                for block, goal in block_to_goal.items()
-            }
-            
-            for future in concurrent.futures.as_completed(future_to_block):
-                block = future_to_block[future]
-                try:
-                    block, path = future.result()
-                    if path:
-                        block_paths[block] = path
-                    else:
-                        print(f"No path found for block at {block}")
-                except Exception as e:
-                    print(f"Error computing path for block at {block}: {e}")
-        
-        # Restore original obstacles
-        self.obstacles = original_obstacles
-        self.build_obstacle_maze()
-        
-        # Check if we found paths for all blocks
-        if len(block_paths) != len(remaining_blocks):
-            print(f"Warning: Found paths for only {len(block_paths)}/{len(remaining_blocks)} blocks")
-            return None
-            
-        # Combine paths into a sequence of states
-        return self.combine_block_paths(current_state_set, block_paths, blocks_at_goal)
-    
-    def find_path_for_block(self, start, goal, time_limit=2.0):
-        """
-        Find a path for a single block from start to goal
-        using A* search with obstacle awareness
-        """
-        start_time = time.time()
-        
-        # Initialize A* search
-        open_set = [(self.obstacle_aware_distance(start, goal), 0, start, [])]
-        closed_set = set()
-        
-        while open_set and time.time() - start_time < time_limit:
-            # Get state with lowest f-score
-            f, g, current, path = heapq.heappop(open_set)
-            
-            # Check if goal reached
-            if current == goal:
-                return path + [current]
-                
-            # Skip if already processed
-            if current in closed_set:
-                continue
-                
-            closed_set.add(current)
-            current_path = path + [current]
-            
-            # Process neighbors
-            for dx, dy in self.directions:
-                neighbor = (current[0] + dx, current[1] + dy)
-                
-                # Skip if out of bounds or is an obstacle
-                if not (0 <= neighbor[0] < self.grid_size[0] and 0 <= neighbor[1] < self.grid_size[1]):
-                    continue
-                if neighbor in self.obstacles or neighbor in closed_set:
-                    continue
-                    
-                # Calculate tentative g-score
-                tentative_g = g + 1
-                f_score = tentative_g + self.obstacle_aware_distance(neighbor, goal)
-                
-                # Add to open set
-                heapq.heappush(open_set, (f_score, tentative_g, neighbor, current_path))
-                
-        # If no path found, return None
-        return None
-    
-    def combine_block_paths(self, initial_state, block_paths, fixed_blocks):
-        """
-        Combine individual block paths into a sequence of states
-        ensuring that blocks don't collide and connectivity is maintained
-        """
-        # Find the longest path
-        max_path_length = max(len(path) for path in block_paths.values()) if block_paths else 0
-        
-        if max_path_length == 0:
-            return None
-            
-        # Initialize the sequence of states with the initial state
-        states_sequence = [list(initial_state)]
-        current_state = set(initial_state)
-        
-        # For each step in the paths
-        for step in range(1, max_path_length + 1):
-            # Start with blocks that stay fixed
-            new_state = set(fixed_blocks)
-            
-            # Track which blocks are moving in this step
-            blocks_moving = {}
-            
-            # For each block, get its position at this step
-            for block, path in block_paths.items():
-                if step < len(path):
-                    # Block is moving to a new position in this step
-                    new_pos = path[step]
-                    blocks_moving[block] = new_pos
-                else:
-                    # Block has reached the end of its path
-                    new_pos = path[-1]
-                    new_state.add(new_pos)
-            
-            # Process moving blocks to avoid collisions
-            # Sort by distance to handle priority
-            sorted_blocks = sorted(
-                blocks_moving.items(),
-                key=lambda item: self.obstacle_aware_distance(item[0], item[1])
-            )
-            
-            for block, new_pos in sorted_blocks:
-                # Check for collisions with positions already in new_state
-                if new_pos not in new_state:
-                    # Remove old position if it's still in current_state
-                    if block in current_state:
-                        current_state.remove(block)
-                    
-                    # Add new position
-                    new_state.add(new_pos)
-                    current_state.add(new_pos)
-                else:
-                    # Collision detected, keep block at its current position
-                    old_pos = block
-                    new_state.add(old_pos)
-            
-            # Verify connectivity - if not connected, revert to previous state
-            if not self.is_connected(new_state):
-                print(f"Warning: Step {step} would break connectivity, keeping previous state")
-                new_state = current_state.copy()
-            else:
-                current_state = new_state.copy()
-                
-            # Add this state to the sequence
-            states_sequence.append(list(new_state))
-        
-        return states_sequence
-    
-    def validate_state_block_count(self, state, expected_count=None):
-        """
-        Validates that a state has the correct number of blocks.
-        Returns a corrected state if needed.
-        """
-        if expected_count is None:
-            expected_count = len(self.start_state)
-            
-        # Convert to set to remove any duplicates
-        state_set = set(state)
-        
-        if len(state_set) != expected_count:
-            print(f"ERROR: State has {len(state_set)} blocks instead of {expected_count}")
-            return False
-        
-        return True
-    
-    def fix_state_block_count(self, state, previous_valid_state=None):
-        """
-        Attempts to fix a state with incorrect block count.
-        """
-        expected_count = len(self.start_state)
-        state_set = set(state)  # Remove duplicates
-        
-        if len(state_set) > expected_count:
-            print(f"Fixing state with {len(state_set)} blocks (expected {expected_count})")
-            
-            # If we have a previous valid state, use blocks from it
-            if previous_valid_state:
-                # Keep blocks that exist in both states
-                common_blocks = state_set.intersection(previous_valid_state)
-                # Take remaining blocks from previous state, prioritizing those at goal
-                blocks_at_goal = previous_valid_state.intersection(self.goal_state)
-                previous_blocks = previous_valid_state - common_blocks
-                
-                # First add common blocks
-                fixed_state = set(common_blocks)
-                
-                # Then add blocks at goal from previous state
-                remaining = expected_count - len(fixed_state)
-                for block in blocks_at_goal:
-                    if len(fixed_state) < expected_count and block not in fixed_state:
-                        fixed_state.add(block)
-                
-                # Finally add other blocks from previous state if needed
-                for block in previous_blocks:
-                    if len(fixed_state) < expected_count and block not in fixed_state:
-                        fixed_state.add(block)
-                        
-            else:
-                # No previous state, just take the first expected_count blocks
-                # Prioritize blocks at goal positions
-                blocks_at_goal = state_set.intersection(self.goal_state)
-                other_blocks = state_set - blocks_at_goal
-                
-                fixed_state = set()
-                
-                # First add blocks at goal
-                for block in blocks_at_goal:
-                    if len(fixed_state) < expected_count:
-                        fixed_state.add(block)
-                
-                # Then add other blocks
-                for block in other_blocks:
-                    if len(fixed_state) < expected_count:
-                        fixed_state.add(block)
-            
-            return list(fixed_state)
-        elif len(state_set) < expected_count:
-            # More complex - we need to add blocks
-            # For now, use previous state if available
-            if previous_valid_state:
-                missing = expected_count - len(state_set)
-                print(f"State missing {missing} blocks, using blocks from previous state")
-                
-                # Find blocks in previous state that aren't in current state
-                additional_blocks = set(previous_valid_state) - state_set
-                
-                # Add as many as needed
-                fixed_state = set(state_set)
-                for block in additional_blocks:
-                    if len(fixed_state) < expected_count:
-                        fixed_state.add(block)
-                
-                return list(fixed_state)
-            else:
-                print("Cannot fix state with missing blocks without previous state")
-                return list(state_set)
-        
-        # Count is correct
-        return list(state_set)
