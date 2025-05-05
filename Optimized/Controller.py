@@ -4,6 +4,7 @@ import time
 from matplotlib.widgets import Button, RadioButtons, TextBox
 from ConnectedMatterAgent import ConnectedMatterAgent
 from Visualizer import Visualizer
+import threading
 
 class SearchController:
     def __init__(self, grid_size, formations, topology="moore", time_limit=1000, max_simultaneous_moves=1, min_simultaneous_moves=1):
@@ -25,11 +26,12 @@ class SearchController:
         # Create visualizer with default animation speed
         self.animation_speed = 0.05  # Default animation speed (seconds)
         self.vis = Visualizer(grid_size, [], self.start_positions, self.animation_speed)
+        self.vis.controller = self  # Add this line
         self.vis.draw_grid()
         plt.show(block=False)  # Show grid before printing anything
 
         # Add radio buttons for shape selection instead of dropdown
-        self.radio_ax = self.vis.fig.add_axes([0.05, 0.05, 0.25, 0.15])
+        self.radio_ax = self.vis.fig.add_axes([0.05, 0.05, 0.16, 0.13])
         self.radio = RadioButtons(
             self.radio_ax, 
             labels=list(formations.keys())[1:],  # Skip "start" key
@@ -46,14 +48,19 @@ class SearchController:
         self.selection_active = False  # New flag to track if selection is currently active
         
         # Add a button to toggle selection mode
-        self.select_button_ax = self.vis.fig.add_axes([0.32, 0.05, 0.16, 0.075])
+        self.select_button_ax = self.vis.fig.add_axes([0.4, 0.05, 0.2, 0.075])
         self.select_button = Button(self.select_button_ax, "Select Goal")
         self.select_button.on_clicked(self.toggle_selection_mode)
         
-        # Add a button to toggle obstacle mode
-        self.obstacle_button_ax = self.vis.fig.add_axes([0.52, 0.05, 0.16, 0.075])
+        # Move obstacle button to the left
+        self.obstacle_button_ax = self.vis.fig.add_axes([0.05, 0.34, 0.16, 0.075])
         self.obstacle_button = Button(self.obstacle_button_ax, "Add Obstacles")
         self.obstacle_button.on_clicked(self.toggle_obstacle_mode)
+        
+        # Add a button to reset obstacles
+        self.reset_obstacles_button_ax = self.vis.fig.add_axes([0.05, 0.25, 0.16, 0.075])
+        self.reset_obstacles_button = Button(self.reset_obstacles_button_ax, "Reset Obstacles")
+        self.reset_obstacles_button.on_clicked(self.reset_obstacles)
         
         # Add label for grid size
         label_ax = self.vis.fig.add_axes([0.82, 0.75, 0.15, 0.05])
@@ -145,6 +152,18 @@ class SearchController:
         anim_speed_info_ax.text(0.5, 0.5, 'Seconds per step', 
                                ha='center', va='center', fontsize=8)
         anim_speed_info_ax.axis('off')
+        
+        
+        # Add timer tracking variables to __init__
+        self.search_start_time = 0
+        self.timer_active = False
+
+        # Add timer display to __init__
+        self.timer_ax = self.vis.fig.add_axes([0.05, 0.5, 0.16, 0.075])
+        self.timer_ax.axis('off')
+        self.timer_text = self.timer_ax.text(0.5, 0.5, "Time: 0.0s", 
+                                          ha='center', va='center', 
+                                          fontweight='bold', fontsize=15)
 
         # Print initialization info
         print(f"Initializing Connected Programmable Matter Agent...")
@@ -288,6 +307,39 @@ class SearchController:
             self.vis.animation_done = False
             self.vis.current_step = 0
             self.vis.path = None
+    
+    def reset_obstacles(self, event):
+        """Clear all obstacles from the grid"""
+        self.obstacles = set()  # Clear the obstacles set
+        
+        # Exit obstacle mode if it's active
+        if self.obstacle_mode:
+            self.obstacle_mode = False
+            self.obstacle_button.label.set_text("Add Obstacles")
+        
+        # Update agent with cleared obstacles
+        self.agent = ConnectedMatterAgent(
+            self.grid_size, 
+            self.start_positions, 
+            self.goal_positions, 
+            self.topology,
+            max_simultaneous_moves=self.max_simultaneous_moves,
+            min_simultaneous_moves=self.min_simultaneous_moves,
+            obstacles=self.obstacles
+        )
+        
+        # Update visualization
+        self.vis.draw_grid()
+        self.vis.highlight_goal_shape(self.goal_positions)
+        self.vis.update_text("All obstacles cleared", color="green")
+        
+        # Reset search state
+        self.search_completed = False
+        self.vis.animation_started = False
+        self.vis.animation_done = False
+        self.vis.current_step = 0
+        self.vis.path = None
+        self.timer_text.set_text("Time: 0.0s")  # Reset timer display
 
     def on_grid_click(self, event, x, y):
         """Handle grid cell clicks for goal selection and obstacle placement"""
@@ -342,7 +394,16 @@ class SearchController:
                 
                 # Update the counter
                 self.vis.update_text(f"{len(self.obstacles)} obstacles placed", color="orange")
-    
+                
+    def update_timer(self):
+        """Update the search timer display"""
+        if self.timer_active:
+            elapsed = time.time() - self.search_start_time
+            self.timer_text.set_text(f"Time: {elapsed:.1f}s")
+            plt.pause(0.1)  # Update display
+            return True  # Continue timer
+        return False  # Stop timer
+        
     def highlight_cell(self, pos, color='green'):
         """Highlight a grid cell with the specified color"""
         x, y = pos
@@ -385,6 +446,7 @@ class SearchController:
         self.vis.animation_done = False
         self.vis.current_step = 0
         self.vis.path = None
+        self.timer_text.set_text("Time: 0.0s")  # Reset timer display
         
         # Update visualization with highlighted goal shape
         self.vis.draw_grid()
@@ -402,26 +464,36 @@ class SearchController:
     
     def run_search(self, event):
         """Runs the search when the Search button is clicked."""
-        # Clear any selection or obstacle mode
+    # Clear any selection or obstacle mode
         self.selection_mode = False
         self.selection_active = False
         self.obstacle_mode = False
         self.select_button.label.set_text("Select Goal")
         self.obstacle_button.label.set_text("Add Obstacles")
-        
-        # Clear goal shape highlight
+    
+    # Start the timer
+        self.search_start_time = time.time()
+        self.timer_text.set_text("Time: 0.0s")
+    
+    # Clear goal shape highlight
         self.vis.draw_grid()
         self.vis.highlight_obstacles(self.obstacles)
         self.vis.update_text("Searching for a path...", color="red")
-        plt.pause(1)  # Force update to show "Searching..." before search starts
-        
+        plt.pause(0.1)  # Force update to show "Searching..." before search starts
+    
         print("\nSearching for optimal path with connectivity constraint...")
         print(f"Avoiding {len(self.obstacles)} obstacles")
         print(f"Using advanced movement patterns including snake streaming for narrow passages...")
-        start_time = time.time()
+    
+    # Run the search
         path = self.agent.search(self.time_limit)
-        search_time = time.time() - start_time
-        
+    
+    # Calculate elapsed time
+        search_time = time.time() - self.search_start_time
+    
+    # Set final time
+        self.timer_text.set_text(f"Time: {search_time:.1f}s")
+    
         self.search_completed = True
 
         if path:
@@ -680,7 +752,10 @@ if __name__ == "__main__":
                       (5, 3), (5, 4), (5, 5), (5, 6), (5, 7), (6, 3), (6, 4), (6, 5), (6, 6), (6, 7)],
         
         "Triangle": [(2, 1), (2, 2), (2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (3, 2), (3, 3),
-                     (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 4), (4, 5), (4, 6), (5, 4), (5, 5)]
+                     (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 4), (4, 5), (4, 6), (5, 4), (5, 5)],
+    
+        "Disocnnected" : [(7, 0), (8, 1), (9, 2), (9, 5), (8, 4), (7, 3), (6, 2), (5, 1), (4, 0), (2, 1),
+                           (3, 2), (4, 3), (5, 4), (6, 5), (7, 6), (8, 7), (9, 8), (8, 9), (7, 8), (6, 7)]
     }
     
     controller = SearchController(
@@ -691,6 +766,7 @@ if __name__ == "__main__":
         max_simultaneous_moves=1,  # Default value, can be changed via UI
         min_simultaneous_moves=1   # Default value, can be changed via UI
     )
+
 
     plt.ioff()  # Disable interactive mode
     plt.show()  # Keep window open until manually closed
