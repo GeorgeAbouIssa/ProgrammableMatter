@@ -221,14 +221,14 @@ class SearchController:
             # Entering selection mode
             self.custom_goal = []  # Clear any previous selection
             self.select_button.label.set_text("Confirm Goal")
-            self.vis.update_text("Click on grid cells to define goal state", color="blue")
+            self.vis.update_text("Click on grid cells to define goal state (1-20 blocks)", color="blue")
             
             # Clear any highlighted goal shape
             self.vis.draw_grid(highlight_goal=False)
             self.vis.highlight_obstacles(self.obstacles)
         else:
             # Exiting selection mode
-            if len(self.custom_goal) == len(self.start_positions):
+            if 1 <= len(self.custom_goal) <= 20:  # MODIFIED: Allow between 1 and 20 blocks
                 self.goal_positions = self.custom_goal.copy()  # Make a copy of the custom goal
                 self.agent = ConnectedMatterAgent(
                     self.grid_size, 
@@ -256,8 +256,8 @@ class SearchController:
             else:
                 self.selection_mode = True  # Stay in selection mode if invalid
                 self.select_button.label.set_text("Select Goal")
-                self.vis.update_text(f"Invalid goal: Need exactly {len(self.start_positions)} blocks", color="red")
-                
+                self.vis.update_text(f"Invalid goal: Need between 1 and 20 blocks", color="red")
+
     def toggle_obstacle_mode(self, event):
         """Toggle between normal mode and obstacle placement mode"""
         if self.dragging:  # Don't allow mode switch while dragging
@@ -356,11 +356,11 @@ class SearchController:
                     # Remove this position
                     self.custom_goal.remove(pos)
                 else:
-                    # Add this position if we haven't reached the limit
-                    if len(self.custom_goal) < len(self.start_positions):
+                    # Add this position if we haven't reached the maximum limit (20)
+                    if len(self.custom_goal) < 20:  # MODIFIED: Allow up to 20 blocks
                         self.custom_goal.append(pos)
                     else:
-                        # Replace the first position
+                        # Replace the first position if trying to add more than 20
                         self.custom_goal.pop(0)
                         self.custom_goal.append(pos)
                 
@@ -370,31 +370,9 @@ class SearchController:
                     self.highlight_cell(cell_pos, color='green')
                 self.vis.highlight_obstacles(self.obstacles)
                 
-                # Update the counter
-                self.vis.update_text(f"Selected {len(self.custom_goal)}/{len(self.start_positions)} blocks", color="blue")
-        
-        # Handle obstacle placement
-        elif self.obstacle_mode:
-            if 0 <= x < self.grid_size[0] and 0 <= y < self.grid_size[1]:
-                # Don't allow placing obstacles on start positions or goal positions
-                if pos in self.start_positions or pos in self.goal_positions:
-                    return
-                    
-                if pos in self.obstacles:
-                    # Remove this obstacle
-                    self.obstacles.remove(pos)
-                else:
-                    # Add this obstacle
-                    self.obstacles.add(pos)
-                
-                # Redraw the grid with current obstacles
-                self.vis.draw_grid()
-                self.vis.highlight_goal_shape(self.goal_positions)
-                self.vis.highlight_obstacles(self.obstacles)
-                
-                # Update the counter
-                self.vis.update_text(f"{len(self.obstacles)} obstacles placed", color="orange")
-                
+                # Update the counter - show how many blocks selected out of 20 maximum
+                self.vis.update_text(f"Selected {len(self.custom_goal)}/20 blocks", color="blue")
+
     def update_timer(self):
         """Update the search timer display"""
         if self.timer_active:
