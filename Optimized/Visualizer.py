@@ -131,10 +131,7 @@ class Visualizer:
                 
             plt.pause(self.animation_speed)  # Use customizable animation speed
             self.current_step += 1  # Move to the next step
-<<<<<<< HEAD
-=======
             
->>>>>>> 765270bdf61866db3b62a794352c2b2c755b4480
     def highlight_goal_shape(self, goal_positions):
         """Highlight the goal shape with a dim green color"""
         for pos in goal_positions:
