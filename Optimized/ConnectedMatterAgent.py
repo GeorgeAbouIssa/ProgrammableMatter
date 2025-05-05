@@ -2363,7 +2363,7 @@ class ConnectedMatterAgent:
     
     def reconnect_clusters_strict(self, clusters, cluster_distances, current_state, blocks_at_goal, cleanup_path, original_block_count):
         """
-        Improved cluster reconnection with better traversal.
+        Individual block movement with continuous connectivity checks.
         
         Args:
             clusters: List of clusters to reconnect
@@ -2376,6 +2376,9 @@ class ConnectedMatterAgent:
         Returns:
             Set of connected non-goal blocks
         """
+        print(f"Current time: 2025-05-05 20:40:26, User: GeorgeAbouIssa")
+        print(f"Starting reconnection with {len(clusters)} clusters")
+        
         # The closest cluster is our anchor
         anchor_idx = cluster_distances[0][0]
         
@@ -2395,136 +2398,338 @@ class ConnectedMatterAgent:
                 
             print(f"Connecting cluster {idx} with {len(cluster_to_connect)} blocks")
             
-            # Calculate centroids
-            source_centroid = self.calculate_centroid(cluster_to_connect)
-            target_centroid = self.calculate_centroid(connected_blocks)
+            # Create a working copy of the cluster
+            remaining_cluster = cluster_to_connect.copy()
+            
+            # Find the closest pair of blocks between the clusters
+            closest_pair = None
+            min_distance = float('inf')
+            
+            for pos1 in cluster_to_connect:
+                for pos2 in connected_blocks:
+                    dist = abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+                    if dist < min_distance:
+                        min_distance = dist
+                        closest_pair = (pos1, pos2)
+            
+            if not closest_pair:
+                print(f"No valid connection found for cluster {idx}")
+                connected_blocks.update(cluster_to_connect)
+                continue
+                
+            source_pos, target_pos = closest_pair
             
             # For very close clusters, just combine them directly
-            distance = abs(source_centroid[0] - target_centroid[0]) + abs(source_centroid[1] - target_centroid[1])
-            if distance <= 3:
+            if min_distance <= 2:
                 connected_blocks.update(cluster_to_connect)
                 print(f"Clusters are very close, direct connection made")
                 continue
             
-            # For more distant clusters, move the entire cluster step by step
-            print(f"Moving cluster at distance {distance}")
+            print(f"Moving individual blocks from cluster {idx} to connect at distance {min_distance}")
             
-            # Calculate direction vector from source to target
-            dx = target_centroid[0] - source_centroid[0]
-            dy = target_centroid[1] - source_centroid[1]
+            # Calculate approximately how many blocks we need to move
+            # to bridge the gap (with a buffer for obstacles)
+            blocks_to_move = min(len(cluster_to_connect) - 1, min_distance + 3)
+            blocks_moved = 0
             
-            # Normalize direction
-            total_steps = max(1, abs(dx) + abs(dy))
-            step_x = dx / total_steps if total_steps > 0 else 0
-            step_y = dy / total_steps if total_steps > 0 else 0
-            
-            # We'll move in small increments to maintain connectivity
-            max_steps = min(int(total_steps), 15)  # Limit to avoid too many steps
-            
-            # Track the moving cluster's positions
-            moving_cluster = cluster_to_connect.copy()
-            
-            # For each step...
-            for step in range(1, max_steps + 1):
-                # Calculate how much to move in this step
-                move_x = int(round(step_x * step))
-                move_y = int(round(step_y * step))
+            # Process one block at a time
+            while blocks_moved < blocks_to_move and remaining_cluster:
+                # Find a block that can be removed without disconnecting the cluster
+                movable_block = None
                 
-                # Calculate tentative new positions for all blocks in cluster
-                new_positions = {}
-                for block in moving_cluster:
-                    new_pos = (block[0] + move_x, block[1] + move_y)
+                for block in remaining_cluster:
+                    # Check if removing this block maintains connectivity
+                    temp_cluster = remaining_cluster - {block}
                     
-                    # Check if position is valid
-                    if (0 <= new_pos[0] < self.grid_size[0] and 
-                        0 <= new_pos[1] < self.grid_size[1] and
-                        new_pos not in self.obstacles and
-                        new_pos not in blocks_at_goal and
-                        (new_pos not in current_blocks or new_pos in moving_cluster)):
-                        new_positions[block] = new_pos
+                    # If empty or still connected, we can move this block
+                    if not temp_cluster or self.is_connected(temp_cluster):
+                        movable_block = block
+                        break
                 
-                # If no valid moves, try to navigate around obstacles
-                if not new_positions and step > 1:
-                    # Try alternative directions
-                    alt_directions = [
-                        (move_x, 0),      # Try moving just horizontally
-                        (0, move_y),      # Try moving just vertically
-                        (move_x, move_y + 1),  # Try with slight vertical offset
-                        (move_x + 1, move_y),  # Try with slight horizontal offset
-                    ]
-                    
-                    for alt_x, alt_y in alt_directions:
-                        alt_new_positions = {}
-                        for block in moving_cluster:
-                            alt_pos = (block[0] + alt_x, block[1] + alt_y)
-                            
-                            if (0 <= alt_pos[0] < self.grid_size[0] and 
-                                0 <= alt_pos[1] < self.grid_size[1] and
-                                alt_pos not in self.obstacles and
-                                alt_pos not in blocks_at_goal and
-                                (alt_pos not in current_blocks or alt_pos in moving_cluster)):
-                                alt_new_positions[block] = alt_pos
-                        
-                        if len(alt_new_positions) > len(new_positions):
-                            new_positions = alt_new_positions
-                
-                # If we still can't move any blocks, stop this cluster's movement
-                if not new_positions:
-                    print(f"Cannot move cluster further, stopping at step {step}")
+                if not movable_block:
+                    print(f"No more blocks can be moved without disconnecting")
                     break
                 
-                # Now move the blocks we can move
-                moved_blocks = set()
+                print(f"Moving block at {movable_block} toward target")
                 
-                # First remove blocks from their old positions
-                for block in new_positions:
-                    current_blocks.remove(block)
-                    moved_blocks.add(block)
+                # Find a path for this block to the connected component
+                # Avoid all obstacles including goal blocks
+                path = None
+                target_block = None
                 
-                # Update path to show removal
-                if moved_blocks:
+                # Try to find a path to any block in the connected component
+                for connected_block in connected_blocks:
+                    obstacles = ((current_blocks - {movable_block, connected_block}) | 
+                                 self.obstacles | blocks_at_goal)
+                    
+                    temp_path = self.find_clean_path(movable_block, connected_block, obstacles)
+                    
+                    if temp_path and (not path or len(temp_path) < len(path)):
+                        path = temp_path
+                        target_block = connected_block
+                
+                if not path:
+                    print(f"No valid path found for block at {movable_block}")
+                    # Try the next block
+                    remaining_cluster.remove(movable_block)
+                    continue
+                
+                print(f"Found path of length {len(path)} to {target_block}")
+                
+                # Remove the block from its current position
+                current_blocks.remove(movable_block)
+                remaining_cluster.remove(movable_block)
+                
+                # Verify block count after removal
+                assert len(current_blocks) == original_block_count - 1, f"Block count mismatch after removal: {len(current_blocks)}"
+                
+                # Add state to show removal
+                cleanup_path.append(list(current_blocks))
+                
+                # Move the block along the path (step by step)
+                # We'll go to the second-to-last position to avoid colliding with the target
+                last_idx = min(len(path) - 2, min_distance)
+                
+                # If path is too short, just use the last valid position
+                if last_idx < 1:
+                    last_idx = 1 if len(path) > 1 else 0
+                
+                # Walk the block through each step of the path
+                current_pos = None
+                
+                for i in range(1, last_idx + 1):
+                    # Get the next position in the path
+                    new_pos = path[i]
+                    
+                    # Check if this position is valid
+                    if (new_pos not in current_blocks and 
+                        new_pos not in blocks_at_goal and
+                        new_pos not in self.obstacles):
+                        
+                        # If we had placed the block somewhere earlier, remove it
+                        if current_pos:
+                            current_blocks.remove(current_pos)
+                            # Add state to show removal
+                            cleanup_path.append(list(current_blocks))
+                        
+                        # Place the block at the new position
+                        current_blocks.add(new_pos)
+                        current_pos = new_pos
+                        
+                        # Verify block count
+                        assert len(current_blocks) == original_block_count, f"Block count mismatch: {len(current_blocks)}"
+                        
+                        # Add state to show the move
+                        cleanup_path.append(list(current_blocks))
+                    else:
+                        # Position already occupied, try next
+                        print(f"Position {new_pos} is occupied, trying next")
+                        continue
+                
+                # If we successfully placed the block somewhere, count it
+                if current_pos:
+                    blocks_moved += 1
+                    connected_blocks.add(current_pos)
+                    print(f"Successfully moved block to {current_pos}")
+                    
+                    # NEW: Check for any blocks that need to be reconnected
+                    # after this move
+                    self.check_and_reconnect_blocks(
+                        current_blocks, blocks_at_goal, connected_blocks,
+                        remaining_cluster, cleanup_path, original_block_count
+                    )
+                else:
+                    # Couldn't place the block anywhere, add it back
+                    print(f"Failed to move block, adding back")
+                    current_blocks.add(movable_block)
+                    remaining_cluster.add(movable_block)
+                    
+                    # Verify block count
+                    assert len(current_blocks) == original_block_count, f"Block count mismatch: {len(current_blocks)}"
+                    
+                    # Add state to show the rollback
                     cleanup_path.append(list(current_blocks))
+            
+            # Add any remaining blocks from this cluster to the connected component
+            connected_blocks.update(remaining_cluster)
+            
+            print(f"Connected cluster {idx} by moving {blocks_moved} blocks")
+        
+        # Return non-goal blocks
+        return current_blocks - blocks_at_goal
+    
+    def check_and_reconnect_blocks(self, current_blocks, blocks_at_goal, connected_blocks, 
+                                   remaining_cluster, cleanup_path, original_block_count):
+        """
+        Check if there are blocks that need to be reconnected and handle them.
+        
+        Args:
+            current_blocks: Current set of all blocks
+            blocks_at_goal: Set of blocks at goal positions
+            connected_blocks: Set of blocks already connected
+            remaining_cluster: Blocks in the current cluster being processed
+            cleanup_path: Path being built
+            original_block_count: Original number of blocks to maintain
+        """
+        # First identify all blocks not at goal positions
+        non_goal_blocks = current_blocks - blocks_at_goal
+        
+        # Check if all non-goal blocks are connected
+        if self.is_connected(non_goal_blocks):
+            return  # All good, no need to reconnect anything
+        
+        # Find the disconnected components
+        all_clusters = self.find_disconnected_components(non_goal_blocks)
+        
+        # If only one cluster, nothing to reconnect
+        if len(all_clusters) <= 1:
+            return
+        
+        print(f"Found {len(all_clusters)} disconnected components after moving block")
+        
+        # Identify the main connected component (the one with the most blocks 
+        # from the original connected_blocks)
+        main_cluster_idx = 0
+        max_overlap = 0
+        
+        for i, cluster in enumerate(all_clusters):
+            cluster_set = set(cluster)
+            overlap = len(cluster_set.intersection(connected_blocks))
+            
+            if overlap > max_overlap:
+                max_overlap = overlap
+                main_cluster_idx = i
+        
+        main_cluster = set(all_clusters[main_cluster_idx])
+        print(f"Main cluster has {len(main_cluster)} blocks")
+        
+        # For each other cluster, try to reconnect it
+        for i, cluster in enumerate(all_clusters):
+            if i == main_cluster_idx:
+                continue
                 
-                # Add blocks at their new positions
-                for block, new_pos in new_positions.items():
+            cluster_set = set(cluster)
+            print(f"Processing disconnected cluster {i} with {len(cluster_set)} blocks")
+            
+            # Find the closest pair of blocks between this cluster and the main cluster
+            closest_pair = None
+            min_distance = float('inf')
+            
+            for pos1 in cluster_set:
+                for pos2 in main_cluster:
+                    dist = abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+                    if dist < min_distance:
+                        min_distance = dist
+                        closest_pair = (pos1, pos2)
+            
+            if not closest_pair:
+                print(f"No valid connection found for disconnected cluster {i}")
+                continue
+                
+            source_pos, target_pos = closest_pair
+            
+            # For very close clusters, nothing needs to be done
+            if min_distance <= 1:
+                print(f"Disconnected cluster {i} is already adjacent to main cluster")
+                continue
+            
+            print(f"Reconnecting cluster {i} at distance {min_distance}")
+            
+            # Find a block in the disconnected cluster that can be moved
+            movable_block = None
+            
+            for block in cluster_set:
+                # Check if removing this block maintains connectivity
+                temp_cluster = cluster_set - {block}
+                
+                # If empty or still connected, we can move this block
+                if not temp_cluster or self.is_connected(temp_cluster):
+                    movable_block = block
+                    break
+            
+            if not movable_block:
+                print(f"No block can be moved from disconnected cluster {i}")
+                continue
+            
+            # Find a path for this block to the main cluster
+            path = None
+            
+            # Try to find a path to any block in the main cluster
+            for main_block in main_cluster:
+                obstacles = ((current_blocks - {movable_block, main_block}) | 
+                             self.obstacles | blocks_at_goal)
+                
+                temp_path = self.find_clean_path(movable_block, main_block, obstacles)
+                
+                if temp_path and (not path or len(temp_path) < len(path)):
+                    path = temp_path
+                    target_block = main_block
+            
+            if not path:
+                print(f"No valid path found to reconnect cluster {i}")
+                continue
+            
+            print(f"Found path of length {len(path)} to reconnect")
+            
+            # Similar movement logic as in the main function
+            # Remove the block from its current position
+            current_blocks.remove(movable_block)
+            
+            # Verify block count after removal
+            assert len(current_blocks) == original_block_count - 1, f"Block count mismatch after removal: {len(current_blocks)}"
+            
+            # Add state to show removal
+            cleanup_path.append(list(current_blocks))
+            
+            # Move the block to connect the clusters
+            last_idx = len(path) - 2
+            if last_idx < 1:
+                last_idx = 1 if len(path) > 1 else 0
+            
+            current_pos = None
+            
+            for i in range(1, last_idx + 1):
+                new_pos = path[i]
+                
+                if (new_pos not in current_blocks and 
+                    new_pos not in blocks_at_goal and
+                    new_pos not in self.obstacles):
+                    
+                    if current_pos:
+                        current_blocks.remove(current_pos)
+                        cleanup_path.append(list(current_blocks))
+                    
                     current_blocks.add(new_pos)
-                
-                # Update path to show addition
-                if moved_blocks:
+                    current_pos = new_pos
+                    
+                    # Verify block count
+                    assert len(current_blocks) == original_block_count, f"Block count mismatch: {len(current_blocks)}"
+                    
+                    # Add state to show the move
                     cleanup_path.append(list(current_blocks))
+                else:
+                    continue
+            
+            # If we successfully reconnected, update the main cluster
+            if current_pos:
+                print(f"Successfully reconnected cluster {i}")
+                main_cluster.add(current_pos)
+                main_cluster.update(cluster_set - {movable_block})
+            else:
+                # Couldn't reconnect, add the block back
+                current_blocks.add(movable_block)
                 
                 # Verify block count
                 assert len(current_blocks) == original_block_count, f"Block count mismatch: {len(current_blocks)}"
                 
-                # Update moving cluster with new positions
-                moving_cluster = set()
-                for block, new_pos in new_positions.items():
-                    moving_cluster.add(new_pos)
+                # Add state to show the rollback
+                cleanup_path.append(list(current_blocks))
                 
-                # Check if we've reached the target cluster
-                for pos in moving_cluster:
-                    for target_pos in connected_blocks:
-                        if abs(pos[0] - target_pos[0]) + abs(pos[1] - target_pos[1]) == 1:
-                            # We've reached the target cluster, stop moving
-                            print(f"Cluster connected at step {step}")
-                            break
-                    else:
-                        continue
-                    break
-                else:
-                    # If we didn't break out of the loop, continue moving
-                    continue
-                
-                # If we got here, it means we broke out of both loops - we're connected
-                break
-            
-            # Update connected blocks with the moved cluster
-            connected_blocks.update(moving_cluster)
-            
-            print(f"Successfully connected cluster {idx}")
+                print(f"Failed to reconnect cluster {i}")
         
-        # Return non-goal blocks
-        return current_blocks - blocks_at_goal
+        # Update connected_blocks with the main cluster
+        connected_blocks.clear()
+        connected_blocks.update(main_cluster)
     
     def detect_and_fix_connection(self, cluster1, cluster2):
         """
